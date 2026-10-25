@@ -607,23 +607,109 @@
     return true;
   }
 
+  function projectObbAxis(corners, ax, ay) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < corners.length; i++) {
+      const v = corners[i].x * ax + corners[i].y * ay;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    return { min: min, max: max };
+  }
+
+  /** True if two OBBs overlap (SAT). margin inflates the obstacle. */
+  function obbOverlap(ax, ay, aLen, aW, aAng, bx, by, bLen, bW, bAng, margin) {
+    margin = margin || 0;
+    const ca = obbCorners(ax, ay, aLen, aW, aAng);
+    const cb = obbCorners(bx, by, bLen + margin * 2, bW + margin * 2, bAng);
+    const axes = [];
+    for (let pair = 0; pair < 2; pair++) {
+      const corners = pair === 0 ? ca : cb;
+      for (let i = 0; i < 4; i++) {
+        const p = corners[i];
+        const q = corners[(i + 1) % 4];
+        const ex = q.x - p.x;
+        const ey = q.y - p.y;
+        const len = Math.hypot(ex, ey) || 1;
+        axes.push({ x: -ey / len, y: ex / len });
+      }
+    }
+    for (let i = 0; i < axes.length; i++) {
+      const axis = axes[i];
+      const pa = projectObbAxis(ca, axis.x, axis.y);
+      const pb = projectObbAxis(cb, axis.x, axis.y);
+      if (Math.min(pa.max, pb.max) - Math.max(pa.min, pb.min) <= 0) return false;
+    }
+    return true;
+  }
+
+  /** Collect parked cars from level obstacles. */
+  function levelParkedCars(lvl) {
+    return (lvl.obstacles || []).filter(function (o) {
+      return o && o.kind === "car";
+    });
+  }
+
+  /**
+   * Ghost footprint must not overlap parked cars (with clearance margin).
+   * Used by the L1 demo path so reverse-in clears the trailing neighbour.
+   */
+  function poseClearsCars(x, y, angle, vehicle, cars, margin) {
+    if (!cars || !cars.length) return true;
+    margin = margin != null ? margin : 0.12;
+    for (let i = 0; i < cars.length; i++) {
+      const o = cars[i];
+      const oLen = o.length != null ? o.length : o.w;
+      const oW = o.width != null ? o.width : o.h;
+      if (
+        obbOverlap(
+          x,
+          y,
+          vehicle.length,
+          vehicle.width,
+          angle,
+          o.x,
+          o.y,
+          oLen,
+          oW,
+          o.angle || 0,
+          margin
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function poseClearsDemo(x, y, angle, vehicle, curbLine, cars, carMargin) {
+    return (
+      poseClearsCurb(x, y, angle, vehicle, curbLine, 0.05) &&
+      poseClearsCars(x, y, angle, vehicle, cars, carMargin)
+    );
+  }
+
   /**
    * Bicycle-model integration: velocity only along heading (no sideways slide).
-   * Rejects steps that would push the body past the curb.
+   * Rejects steps that hit the curb or (when cars given) parked-car OBBs.
    */
-  function integrateBicycle(state, speed, steer, dt, vehicle, curbLine) {
+  function integrateBicycle(state, speed, steer, dt, vehicle, curbLine, cars, carMargin) {
     const wb = vehicle.wheelbase || vehicle.length * 0.62;
     const maxSteer = vehicle.steerAngle != null ? vehicle.steerAngle : 0.6;
     if (steer > maxSteer) steer = maxSteer;
     if (steer < -maxSteer) steer = -maxSteer;
+    function tryPose(nx, ny, nAngle) {
+      return poseClearsDemo(nx, ny, nAngle, vehicle, curbLine, cars, carMargin);
+    }
     let angle = state.angle;
     if (Math.abs(speed) > 0.001 && Math.abs(steer) > 0.0005) {
       angle += ((speed * Math.tan(steer)) / wb) * dt;
     }
     const nx = state.x + Math.cos(angle) * speed * dt;
     const ny = state.y + Math.sin(angle) * speed * dt;
-    if (!poseClearsCurb(nx, ny, angle, vehicle, curbLine, 0.05)) {
-      // Try same motion with less steer (stay street-side without lateral push)
+    if (!tryPose(nx, ny, angle)) {
+      // Try same motion with less steer (stay street-side / clear neighbours)
       const steer2 = steer * 0.35;
       let angle2 = state.angle;
       if (Math.abs(speed) > 0.001 && Math.abs(steer2) > 0.0005) {
@@ -631,7 +717,7 @@
       }
       const nx2 = state.x + Math.cos(angle2) * speed * dt;
       const ny2 = state.y + Math.sin(angle2) * speed * dt;
-      if (poseClearsCurb(nx2, ny2, angle2, vehicle, curbLine, 0.05)) {
+      if (tryPose(nx2, ny2, angle2)) {
         state.x = nx2;
         state.y = ny2;
         state.angle = angle2;
@@ -640,7 +726,7 @@
       // Roll straight along heading only
       const nx3 = state.x + Math.cos(state.angle) * speed * dt;
       const ny3 = state.y + Math.sin(state.angle) * speed * dt;
-      if (poseClearsCurb(nx3, ny3, state.angle, vehicle, curbLine, 0.05)) {
+      if (tryPose(nx3, ny3, state.angle)) {
         state.x = nx3;
         state.y = ny3;
         return true;
@@ -673,14 +759,41 @@
 
   /**
    * Level-1 parallel-in demo via bicycle-model poses (no sideways lerp/slide).
-   * Tuned open-loop S-curve (angle-in → hold → counter-steer → creep), scaled by vehicle length.
+   * OBB+margin vs parked cars (esp. trailing neighbour); curb street-side; real S-curve.
    */
   function buildParallelInDemoPath(lvl, vehicle) {
     const steps = buildParallelSteps(lvl, vehicle);
     const spawn =
       lvl.spawn || { x: steps[0].x, y: steps[0].y, angle: steps[0].angle };
     const curbLine = getCurbLine(lvl);
-    const pull = steps[0];
+    const parked = levelParkedCars(lvl);
+    const carMargin = 0.12;
+    const pull = {
+      x: steps[0].x,
+      y: steps[0].y,
+      angle: steps[0].angle,
+    };
+    // Long / low-steer: start S a bit closer to the bay so reverse can finish deeper
+    // without needing a wide swing that clips the trailing neighbour.
+    if ((vehicle.length || 4.6) >= 6.2 && curbLine) {
+      const nudge = 0.95;
+      const ny = pull.y - curbLine.ny * nudge;
+      const nx = pull.x - curbLine.nx * nudge;
+      if (
+        poseClearsDemo(
+          nx,
+          ny,
+          pull.angle,
+          vehicle,
+          curbLine,
+          parked,
+          carMargin
+        )
+      ) {
+        pull.x = nx;
+        pull.y = ny;
+      }
+    }
     const fin = { x: lvl.target.x, y: lvl.target.y };
     const maxSteer = vehicle.steerAngle != null ? vehicle.steerAngle : 0.6;
     const dt = 1 / 30;
@@ -688,14 +801,28 @@
     const state = { x: spawn.x, y: spawn.y, angle: spawn.angle };
     const turnSign = steps[0].turnSign != null ? steps[0].turnSign : -1;
     const len = vehicle.length || 4.6;
-    const angMag = Math.max(0.48, Math.min(0.62, 0.66 - 0.02 * len));
-    const clearN = 36;
-    const holdN = Math.max(22, Math.min(34, Math.round(40 - len * 2)));
-    const strN = Math.max(45, Math.min(110, Math.round(len * 14)));
+    // Deeper swing for short cars; long/low-steer stay shallower to clear trailer
+    const angMag = Math.max(0.48, Math.min(0.65, 0.82 - 0.04 * len));
+    const clearN = Math.max(22, Math.min(40, Math.round(14 + len * 2.2)));
+    const holdN = Math.max(6, Math.min(16, Math.round(20 - len)));
+    const strN = Math.max(36, Math.min(80, Math.round(28 + len * 4)));
     const angleIn = pull.angle + turnSign * angMag;
     const finishAng = pull.angle;
     const angleInSteer = turnSign > 0 ? -maxSteer : maxSteer;
     const straightenSteer = -angleInSteer;
+    const revX = -Math.cos(pull.angle);
+    const revY = -Math.sin(pull.angle);
+    // Street-side unit (away from curb along curb normal)
+    const streetNx = curbLine ? curbLine.nx : 0;
+    const streetNy = curbLine ? curbLine.ny : 1;
+
+    function pastBayCenter(s) {
+      return (s.x - fin.x) * revX + (s.y - fin.y) * revY;
+    }
+    function latToFin(s) {
+      // positive = more street-side than finish
+      return (s.x - fin.x) * streetNx + (s.y - fin.y) * streetNy;
+    }
 
     let recordSkip = 0;
     function record(force) {
@@ -710,11 +837,31 @@
       for (let i = 0; i < stepsMax; i++) {
         const before = { x: state.x, y: state.y, angle: state.angle };
         const steer = typeof steerFn === "number" ? steerFn : steerFn(state, i);
-        const ok = integrateBicycle(state, speed, steer, dt, vehicle, curbLine);
+        const ok = integrateBicycle(
+          state,
+          speed,
+          steer,
+          dt,
+          vehicle,
+          curbLine,
+          parked,
+          carMargin
+        );
         if (!ok) {
-          if (!integrateBicycle(state, speed * 0.5, steer, dt, vehicle, curbLine)) {
+          if (
+            !integrateBicycle(
+              state,
+              speed * 0.45,
+              steer,
+              dt,
+              vehicle,
+              curbLine,
+              parked,
+              carMargin
+            )
+          ) {
             stalled++;
-            if (stalled > 8) break;
+            if (stalled > 5) break;
             continue;
           }
         } else {
@@ -728,6 +875,7 @@
         }
         if (doneFn && doneFn(state, i)) break;
       }
+      return stalled > 5;
     }
 
     record(true);
@@ -753,7 +901,6 @@
         return Math.hypot(s.x - pull.x, s.y - pull.y) < 0.32;
       }
     );
-    // Nudge forward while aligning heading (no in-place spin)
     drive(
       0.7,
       function (s) {
@@ -766,95 +913,185 @@
     );
     hold(8);
 
-    // 2) Reverse clear of the lead car
-    drive(-1.7, 0, clearN, null);
+    // 2) Reverse clear of the lead (front) car
+    drive(-1.65, 0, clearN, null);
 
-    // 3) Angle-in (full lock toward curb)
+    // 3) Angle-in toward curb — OBB rejects any pose that clips the trailing car
     drive(
-      -2.05,
+      -2.0,
       angleInSteer,
-      100,
+      110,
       function (s) {
         return Math.abs(wrapAngle(s.angle - angleIn)) < 0.07;
       }
     );
 
-    // 4) Hold angle, reverse deeper (wheels straight)
-    drive(-1.8, 0, holdN, null);
+    // 4) Brief hold while still reverse
+    drive(-1.7, 0, holdN, function (s) {
+      return pastBayCenter(s) > -0.5;
+    });
 
-    // 5) Counter-steer straighten while reversing
-    drive(
-      -1.6,
+    // 5) Counter-steer straighten; hard-stop before bay center so rear stays off trailer
+    let blocked = drive(
+      -1.45,
       straightenSteer,
       strN,
       function (s) {
-        return Math.abs(wrapAngle(s.angle - finishAng)) < 0.09;
+        if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.1) return true;
+        if (pastBayCenter(s) > 0.28) return true;
+        return false;
       }
     );
 
-    // 6) If still angled (long / tight vehicles), forward then reverse while seeking finish heading
-    if (Math.abs(wrapAngle(state.angle - finishAng)) > 0.18) {
+    // 6–7) Multi-point: if still angled/high, forward with angle-in steer
+    // (straightens toward finish without diving into trailer), then shallow reverse bite.
+    // Repeat up to 3 times for long / low-steer vehicles.
+    const cycles = len >= 5.5 ? 3 : len >= 4.8 ? 2 : 1;
+    for (let cyc = 0; cyc < cycles; cyc++) {
+      const dist = Math.hypot(state.x - fin.x, state.y - fin.y);
+      const angErr = Math.abs(wrapAngle(state.angle - finishAng));
+      const lat = latToFin(state);
+      if (dist < 0.85 && angErr < 0.14 && lat < 1.05) break;
+
+      // Forward: angle-in steer while going forward turns nose back toward street/finish
+      // and slides the rear away from the trailing neighbour.
+      if (angErr > 0.1 || blocked || lat > 1.1) {
+        blocked = drive(
+          1.25,
+          angleInSteer,
+          48,
+          function (s) {
+            return Math.abs(wrapAngle(s.angle - finishAng)) < 0.1;
+          }
+        );
+        // Nudge a little street-side if still overlapping the reverse corridor
+        if (pastBayCenter(state) > 0.15) {
+          drive(
+            1.0,
+            function (s) {
+              return steerTowardHeading(s.angle, finishAng, false, maxSteer * 0.7);
+            },
+            18,
+            function (s) {
+              return pastBayCenter(s) < 0.05;
+            }
+          );
+        }
+      }
+
+      // Shallow reverse bite toward curb, then straighten — stop before trailer
+      const biteAng = finishAng + turnSign * Math.max(0.22, angMag * 0.55);
       drive(
-        1.3,
+        -1.55,
+        function (s) {
+          return steerTowardHeading(s.angle, biteAng, true, maxSteer);
+        },
+        42,
+        function (s) {
+          return (
+            Math.abs(wrapAngle(s.angle - biteAng)) < 0.08 ||
+            pastBayCenter(s) > 0.2
+          );
+        }
+      );
+      blocked = drive(
+        -1.3,
+        straightenSteer,
+        50,
+        function (s) {
+          if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.1) return true;
+          if (pastBayCenter(s) > 0.3) return true;
+          return false;
+        }
+      );
+    }
+
+    // Final forward straighten if still cocked
+    if (Math.abs(wrapAngle(state.angle - finishAng)) > 0.12) {
+      drive(
+        1.15,
         function (s) {
           return steerTowardHeading(s.angle, finishAng, false, maxSteer);
         },
-        50,
-        function (s) {
-          return Math.abs(wrapAngle(s.angle - finishAng)) < 0.1;
-        }
-      );
-      drive(
-        -1.45,
-        function (s) {
-          return steerTowardHeading(s.angle, finishAng, true, maxSteer);
-        },
-        60,
+        40,
         function (s) {
           return Math.abs(wrapAngle(s.angle - finishAng)) < 0.1;
         }
       );
     }
 
-    // 7) Creep along heading into bay center
-    for (let k = 0; k < 140; k++) {
+    // 8) Creep along bay axis; never reverse past center into trailing car
+    for (let k = 0; k < 180; k++) {
       const dx = fin.x - state.x;
       const dy = fin.y - state.y;
       const dist = Math.hypot(dx, dy);
       const angErr = Math.abs(wrapAngle(state.angle - finishAng));
-      if (dist < 0.28 && angErr < 0.12) break;
+      if (dist < 0.3 && angErr < 0.12) break;
       const along = dx * Math.cos(state.angle) + dy * Math.sin(state.angle);
+      const past = pastBayCenter(state);
+      const lat = latToFin(state);
       let speed = 0;
-      if (along < -0.05) speed = -1.3;
-      else if (along > 0.05) speed = 1.1;
-      else if (angErr > 0.1) speed = -0.4;
+      // Prefer reverse only while still short of bay center
+      if (along < -0.05 && past < 0.28) speed = -1.05;
+      else if (along > 0.05 && past > -0.5) speed = 0.95;
+      else if (lat > 0.9 && past < 0.15) {
+        // still street-high: tiny reverse with slight curb bite
+        speed = -0.7;
+      } else if (angErr > 0.12 && past < 0.15) speed = -0.35;
       if (speed === 0) {
-        if (angErr < 0.08) break;
-        state.angle += Math.max(
-          -0.04,
-          Math.min(0.04, wrapAngle(finishAng - state.angle))
-        );
-        record(true);
-        continue;
+        if (angErr < 0.12 || dist < 1.0) break;
+        speed = past > 0.25 ? 0.4 : -0.25;
+      }
+      if (speed < 0 && past > 0.32) {
+        if (dist < 1.15) break;
+        speed = 0.45;
+      }
+      let steer = steerTowardHeading(
+        state.angle,
+        finishAng,
+        speed < 0,
+        maxSteer * 0.4
+      );
+      // Soft curb-ward bias while reversing if still high (bicycle only — small steer)
+      if (speed < 0 && lat > 0.85 && angErr < 0.35) {
+        steer = angleInSteer * 0.35 + steer * 0.65;
       }
       const before = { x: state.x, y: state.y };
       const moved = integrateBicycle(
         state,
         speed,
-        steerTowardHeading(state.angle, finishAng, speed < 0, maxSteer * 0.45),
+        steer,
         dt,
         vehicle,
-        curbLine
+        curbLine,
+        parked,
+        carMargin
       );
       if (moved && Math.hypot(state.x - before.x, state.y - before.y) > 1e-6) {
         record(false);
       } else {
-        break;
+        // If reverse blocked by trailer OBB, try a short forward instead of stalling
+        if (speed < 0) {
+          const fwd = integrateBicycle(
+            state,
+            0.55,
+            steerTowardHeading(state.angle, finishAng, false, maxSteer * 0.5),
+            dt,
+            vehicle,
+            curbLine,
+            parked,
+            carMargin
+          );
+          if (fwd) record(false);
+          else break;
+        } else {
+          break;
+        }
       }
     }
     hold(12);
 
-    const duration = Math.max(7, Math.min(11, poses.length / 30));
+    const duration = Math.max(7, Math.min(12, poses.length / 30));
     return {
       id: lvl.id,
       poses: poses,
