@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="description" content="Park & Exit — learn to park and leave a spot in a top-down 2D parking game." />
+  <title>Park & Exit</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='8' y='20' width='48' height='24' rx='6' fill='%234ade80'/%3E%3Crect x='14' y='24' width='16' height='10' rx='2' fill='%231e293b'/%3E%3Ccircle cx='18' cy='46' r='5' fill='%230f172a'/%3E%3Ccircle cx='46' cy='46' r='5' fill='%230f172a'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="app">
+    <!-- Start / Menu Screen -->
+    <section id="screen-menu" class="screen active">
+      <div class="menu-panel">
+        <header class="menu-header">
+          <p class="eyebrow">Parking practice</p>
+          <h1>Park &amp; Exit</h1>
+          <p class="tagline">Learn to park in — and drive out — of tight spots.</p>
+        </header>
+
+        <div class="menu-section">
+          <h2>Choose your vehicle</h2>
+          <div id="vehicle-picker" class="picker-grid" role="listbox" aria-label="Vehicle"></div>
+        </div>
+
+        <div class="menu-section">
+          <h2>Choose a level</h2>
+          <div id="level-picker" class="level-list" role="listbox" aria-label="Level"></div>
+        </div>
+
+        <button id="btn-start" class="btn btn-primary btn-lg" type="button">Start driving</button>
+        <p class="hint-keys">Keyboard: <kbd>↑</kbd><kbd>W</kbd> accelerate · <kbd>↓</kbd><kbd>S</kbd> brake/reverse · <kbd>←</kbd><kbd>→</kbd><kbd>A</kbd><kbd>D</kbd> steer · <kbd>Space</kbd> handbrake · <kbd>R</kbd> restart</p>
+      </div>
+    </section>
+
+    <!-- Game Screen -->
+    <section id="screen-game" class="screen">
+      <header id="hud" class="hud">
+        <div class="hud-left">
+          <button id="btn-menu" class="btn btn-ghost" type="button" title="Back to menu">Menu</button>
+          <button id="btn-restart" class="btn btn-ghost" type="button" title="Restart (R)">Restart</button>
+        </div>
+        <div class="hud-center">
+          <h2 id="hud-level">Level</h2>
+          <p id="hud-tip" class="hud-tip"></p>
+        </div>
+        <div class="hud-right">
+          <div class="stat"><span class="stat-label">Time</span><span id="hud-time">0.0s</span></div>
+          <div class="stat"><span class="stat-label">Bumps</span><span id="hud-bumps">0</span></div>
+          <div class="stat"><span class="stat-label">Car</span><span id="hud-car">—</span></div>
+        </div>
+      </header>
+
+      <div class="canvas-wrap">
+        <canvas id="game" width="960" height="640" aria-label="Parking lot game canvas"></canvas>
+        <div id="touch-controls" class="touch-controls" aria-hidden="true">
+          <div class="touch-col">
+            <button class="touch-btn" data-key="ArrowLeft" type="button">◀</button>
+            <button class="touch-btn" data-key="ArrowRight" type="button">▶</button>
+          </div>
+          <div class="touch-col">
+            <button class="touch-btn" data-key=" " type="button">HB</button>
+          </div>
+          <div class="touch-col">
+            <button class="touch-btn" data-key="ArrowUp" type="button">▲</button>
+            <button class="touch-btn" data-key="ArrowDown" type="button">▼</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="overlay-success" class="overlay hidden">
+        <div class="overlay-card">
+          <p class="eyebrow success">Nice park!</p>
+          <h2 id="success-title">Level complete</h2>
+          <ul id="success-stats" class="success-stats"></ul>
+          <div class="overlay-actions">
+            <button id="btn-next" class="btn btn-primary" type="button">Next level</button>
+            <button id="btn-again" class="btn btn-secondary" type="button">Try again</button>
+            <button id="btn-success-menu" class="btn btn-ghost" type="button">Menu</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="overlay-fail" class="overlay hidden">
+        <div class="overlay-card">
+          <p class="eyebrow warn">Too many bumps</p>
+          <h2>Take a breath — try again</h2>
+          <p class="overlay-copy">Soft bumps are fine while learning. Reset and try a wider arc.</p>
+          <div class="overlay-actions">
+            <button id="btn-fail-retry" class="btn btn-primary" type="button">Retry</button>
+            <button id="btn-fail-menu" class="btn btn-ghost" type="button">Menu</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="js/vehicles.js"></script>
+  <script src="js/levels.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
