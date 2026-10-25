@@ -594,14 +594,40 @@
     return a + wrapAngle(b - a) * t;
   }
 
+  /**
+   * Four wheel contact points — same geometry as game.js carWheelPositions.
+   * Demo curb rule matches play: only wheels must stay street-side; bumper may overhang.
+   */
+  function demoWheelPositions(x, y, angle, vehicle) {
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const halfWb = (vehicle.wheelbase || vehicle.length * 0.62) * 0.5;
+    const halfTrack = vehicle.width * 0.42;
+    const pts = [
+      [halfWb, halfTrack],
+      [halfWb, -halfTrack],
+      [-halfWb, halfTrack],
+      [-halfWb, -halfTrack],
+    ];
+    return pts.map(function (p) {
+      return {
+        x: x + p[0] * c - p[1] * s,
+        y: y + p[0] * s + p[1] * c,
+      };
+    });
+  }
+
+  /**
+   * Wheel-only curb clearance (pad ≥ 0). Body/bumper may cross curbLine.
+   */
   function poseClearsCurb(x, y, angle, vehicle, curbLine, pad) {
     if (!curbLine) return true;
-    pad = pad != null ? pad : 0.05;
-    const corners = obbCorners(x, y, vehicle.length, vehicle.width, angle);
-    for (let i = 0; i < corners.length; i++) {
-      const p = corners[i];
+    pad = pad != null ? pad : 0.02;
+    const wheels = demoWheelPositions(x, y, angle, vehicle);
+    for (let i = 0; i < wheels.length; i++) {
+      const w = wheels[i];
       const d =
-        (p.x - curbLine.ox) * curbLine.nx + (p.y - curbLine.oy) * curbLine.ny;
+        (w.x - curbLine.ox) * curbLine.nx + (w.y - curbLine.oy) * curbLine.ny;
       if (d < pad) return false;
     }
     return true;
@@ -684,15 +710,16 @@
   }
 
   function poseClearsDemo(x, y, angle, vehicle, curbLine, cars, carMargin) {
+    // Wheels only vs curb (bumper may overhang); OBB+margin vs parked cars
     return (
-      poseClearsCurb(x, y, angle, vehicle, curbLine, 0.05) &&
+      poseClearsCurb(x, y, angle, vehicle, curbLine, 0.02) &&
       poseClearsCars(x, y, angle, vehicle, cars, carMargin)
     );
   }
 
   /**
    * Bicycle-model integration: velocity only along heading (no sideways slide).
-   * Rejects steps that hit the curb or (when cars given) parked-car OBBs.
+   * Rejects steps whose wheels cross the curb or (when cars given) parked-car OBBs.
    */
   function integrateBicycle(state, speed, steer, dt, vehicle, curbLine, cars, carMargin) {
     const wb = vehicle.wheelbase || vehicle.length * 0.62;
@@ -759,7 +786,8 @@
 
   /**
    * Level-1 parallel-in demo via bicycle-model poses (no sideways lerp/slide).
-   * OBB+margin vs parked cars (esp. trailing neighbour); curb street-side; real S-curve.
+   * OBB+margin vs parked cars (esp. trailing neighbour); wheels street of curb
+   * (bumper may overhang); ends in a pose that passes game success checks.
    */
   function buildParallelInDemoPath(lvl, vehicle) {
     const steps = buildParallelSteps(lvl, vehicle);
@@ -767,63 +795,300 @@
       lvl.spawn || { x: steps[0].x, y: steps[0].y, angle: steps[0].angle };
     const curbLine = getCurbLine(lvl);
     const parked = levelParkedCars(lvl);
-    const carMargin = 0.12;
-    const pull = {
-      x: steps[0].x,
-      y: steps[0].y,
-      angle: steps[0].angle,
-    };
-    // Long / low-steer: start S a bit closer to the bay so reverse can finish deeper
-    // without needing a wide swing that clips the trailing neighbour.
-    if ((vehicle.length || 4.6) >= 6.2 && curbLine) {
-      const nudge = 0.95;
-      const ny = pull.y - curbLine.ny * nudge;
-      const nx = pull.x - curbLine.nx * nudge;
-      if (
-        poseClearsDemo(
-          nx,
-          ny,
-          pull.angle,
-          vehicle,
-          curbLine,
-          parked,
-          carMargin
-        )
-      ) {
-        pull.x = nx;
-        pull.y = ny;
-      }
-    }
     const fin = { x: lvl.target.x, y: lvl.target.y };
     const maxSteer = vehicle.steerAngle != null ? vehicle.steerAngle : 0.6;
     const dt = 1 / 30;
-    const poses = [];
-    const state = { x: spawn.x, y: spawn.y, angle: spawn.angle };
     const turnSign = steps[0].turnSign != null ? steps[0].turnSign : -1;
-    const len = vehicle.length || 4.6;
-    // Deeper swing for short cars; long/low-steer stay shallower to clear trailer
-    const angMag = Math.max(0.48, Math.min(0.65, 0.82 - 0.04 * len));
-    const clearN = Math.max(22, Math.min(40, Math.round(14 + len * 2.2)));
-    const holdN = Math.max(6, Math.min(16, Math.round(20 - len)));
-    const strN = Math.max(36, Math.min(80, Math.round(28 + len * 4)));
-    const angleIn = pull.angle + turnSign * angMag;
-    const finishAng = pull.angle;
+    const finishAng = steps[0].angle;
     const angleInSteer = turnSign > 0 ? -maxSteer : maxSteer;
     const straightenSteer = -angleInSteer;
-    const revX = -Math.cos(pull.angle);
-    const revY = -Math.sin(pull.angle);
-    // Street-side unit (away from curb along curb normal)
+    const revX = -Math.cos(finishAng);
+    const revY = -Math.sin(finishAng);
     const streetNx = curbLine ? curbLine.nx : 0;
     const streetNy = curbLine ? curbLine.ny : 1;
+    const angleTol =
+      lvl.target && lvl.target.angleTol != null ? lvl.target.angleTol : 0.12;
 
     function pastBayCenter(s) {
       return (s.x - fin.x) * revX + (s.y - fin.y) * revY;
     }
     function latToFin(s) {
-      // positive = more street-side than finish
       return (s.x - fin.x) * streetNx + (s.y - fin.y) * streetNy;
     }
+    function angErrFin(s) {
+      const d1 = Math.abs(wrapAngle(s.angle - finishAng));
+      const d2 = Math.abs(wrapAngle(s.angle - (finishAng + Math.PI)));
+      return Math.min(d1, d2);
+    }
+    /** Match game checkSuccess cover + angle (speed ignored for ghost). */
+    function poseLooksParked(s) {
+      const t = lvl.target;
+      if (!t) return false;
+      if (angErrFin(s) > angleTol) return false;
+      const hx = vehicle.length / 2;
+      const hy = vehicle.width / 2;
+      const c = Math.cos(s.angle);
+      const sn = Math.sin(s.angle);
+      const samples = [
+        [0, 0],
+        [-hx, -hy],
+        [hx, -hy],
+        [hx, hy],
+        [-hx, hy],
+      ];
+      let inside = 0;
+      const ca = Math.cos(-(t.angle || 0));
+      const sa = Math.sin(-(t.angle || 0));
+      for (let i = 0; i < samples.length; i++) {
+        const lx = samples[i][0];
+        const ly = samples[i][1];
+        const px = s.x + lx * c - ly * sn;
+        const py = s.y + lx * sn + ly * c;
+        const dx = px - t.x;
+        const dy = py - t.y;
+        const localX = dx * ca - dy * sa;
+        const localY = dx * sa + dy * ca;
+        if (Math.abs(localX) <= t.w / 2 && Math.abs(localY) <= t.h / 2) {
+          inside++;
+        }
+      }
+      const need = t.coverFrac != null ? t.coverFrac : 0.72;
+      return inside / 5 >= need;
+    }
 
+    /**
+     * Candidate reverse-in params (along/street relative to fin).
+     * Tried in order until one ends poseLooksParked — covers hatch…lorry.
+     */
+    const parkCandidates = [
+      { margin: 0.08, along: 6.5, street: 2.9, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
+      { margin: 0.08, along: 6.5, street: 3.6, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
+      { margin: 0.12, along: 6.5, street: 2.7, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
+      { margin: 0.12, along: 7.5, street: 2.9, angMag: 0.55, biteFrac: 1.0, biteN: 20, revPast: 0.5, stopPast: 0.45 },
+      { margin: 0.12, along: 6.5, street: 2.4, angMag: 0.55, biteFrac: 0.7, biteN: 15, revPast: 0.35, stopPast: 0.15 },
+      { margin: 0.12, along: 6.5, street: 2.4, angMag: 0.55, biteFrac: 1.0, biteN: 15, revPast: 0.35, stopPast: 0.15 },
+      { margin: 0.1, along: 6.5, street: 2.4, angMag: 0.6, biteFrac: 1.0, biteN: 15, revPast: 0.35, stopPast: 0.15 },
+      { margin: 0.08, along: 6.5, street: 2.7, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
+      { margin: 0.08, along: 7.5, street: 2.7, angMag: 0.55, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
+      { margin: 0.08, along: 7.5, street: 3.6, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
+      { margin: 0.05, along: 6.5, street: 2.7, angMag: 0.65, biteFrac: 0.7, biteN: 25, revPast: 0.45, stopPast: 0.3 },
+    ];
+
+    function pullFromCandidate(opts) {
+      return {
+        x: fin.x - opts.along * revX + opts.street * streetNx,
+        y: fin.y - opts.along * revY + opts.street * streetNy,
+        angle: finishAng,
+      };
+    }
+
+    /**
+     * Simulate reverse-in from pull; optionally append poses.
+     * Returns final state (and whether it looks parked).
+     */
+    function simulateParkFromPull(pull, opts, posesOut) {
+      const carMargin = opts.margin;
+      const state = { x: pull.x, y: pull.y, angle: pull.angle };
+      function rec() {
+        if (posesOut) posesOut.push({ x: state.x, y: state.y, angle: state.angle });
+      }
+      function drive(speed, steerFn, stepsMax, doneFn) {
+        let stalled = 0;
+        for (let i = 0; i < stepsMax; i++) {
+          const before = { x: state.x, y: state.y, angle: state.angle };
+          const steer = typeof steerFn === "number" ? steerFn : steerFn(state, i);
+          let ok = integrateBicycle(
+            state,
+            speed,
+            steer,
+            dt,
+            vehicle,
+            curbLine,
+            parked,
+            carMargin
+          );
+          if (!ok) {
+            ok = integrateBicycle(
+              state,
+              speed * 0.45,
+              steer,
+              dt,
+              vehicle,
+              curbLine,
+              parked,
+              carMargin
+            );
+            if (!ok) {
+              stalled++;
+              if (stalled > 5) break;
+              continue;
+            }
+          } else {
+            stalled = 0;
+          }
+          if (
+            Math.hypot(state.x - before.x, state.y - before.y) > 1e-6 ||
+            Math.abs(wrapAngle(state.angle - before.angle)) > 1e-5
+          ) {
+            rec();
+          }
+          if (doneFn && doneFn(state, i)) break;
+        }
+      }
+
+      rec();
+      // Clear of lead, angle-in, hold, straighten (stop short of trailer)
+      drive(-1.7, 0, 28, null);
+      drive(
+        -2.05,
+        angleInSteer,
+        160,
+        function (s) {
+          return Math.abs(wrapAngle(s.angle - (finishAng + turnSign * opts.angMag))) < 0.05;
+        }
+      );
+      drive(-1.75, 0, 45, function (s) {
+        return latToFin(s) < 0.5;
+      });
+      drive(-1.4, straightenSteer, 130, function (s) {
+        if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.05) return true;
+        if (pastBayCenter(s) > opts.stopPast) return true;
+        return false;
+      });
+
+      // Saw / shuffle into bay
+      for (let cyc = 0; cyc < 40; cyc++) {
+        if (poseLooksParked(state)) break;
+        if (pastBayCenter(state) > 0.12 || Math.abs(wrapAngle(state.angle - finishAng)) > 0.1) {
+          drive(
+            1.15,
+            function (s) {
+              return steerTowardHeading(s.angle, finishAng, false, maxSteer);
+            },
+            45,
+            function (s) {
+              return pastBayCenter(s) < -0.1 && Math.abs(wrapAngle(s.angle - finishAng)) < 0.05;
+            }
+          );
+        }
+        drive(-1.5, angleInSteer * opts.biteFrac, opts.biteN, function (s) {
+          return latToFin(s) < 0.02 || pastBayCenter(s) > opts.revPast;
+        });
+        drive(-1.1, straightenSteer, 40, function (s) {
+          if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.04) return true;
+          if (pastBayCenter(s) > opts.revPast + 0.12) return true;
+          return false;
+        });
+        drive(
+          1.05,
+          function (s) {
+            return steerTowardHeading(s.angle, finishAng, false, maxSteer);
+          },
+          35,
+          function (s) {
+            return (
+              Math.abs(wrapAngle(s.angle - finishAng)) < 0.04 && pastBayCenter(s) < 0.08
+            );
+          }
+        );
+      }
+
+      // Precision settle onto fin (cover needs ~parallel + centered)
+      for (let i = 0; i < 500; i++) {
+        if (poseLooksParked(state)) break;
+        const lat = latToFin(state);
+        const angE = wrapAngle(state.angle - finishAng);
+        const past = pastBayCenter(state);
+        let speed = 0;
+        let steer = 0;
+        if (past > 0.55) {
+          speed = 0.75;
+          steer = steerTowardHeading(state.angle, finishAng, false, maxSteer);
+        } else if (lat > 0.04) {
+          const bf2 = Math.abs(angE) < 0.1 ? 0.28 : lat > 0.4 ? 0.85 : 0.5;
+          speed = -1.05;
+          steer = angleInSteer * bf2;
+        } else if (Math.abs(angE) > 0.01) {
+          speed = past > 0.05 ? 0.42 : -0.42;
+          steer = steerTowardHeading(state.angle, finishAng, speed < 0, maxSteer);
+        } else if (Math.abs(past) > 0.03) {
+          speed = past > 0 ? 0.32 : -0.32;
+          // past>0 means past center toward trailer; go forward (negative past)
+          // pastBayCenter>0 → toward trailer along reverse dir → need forward (speed>0 when heading=finishAng? 
+          // heading π, forward speed>0 moves -x = toward lead = decreasing past. Yes speed = past>0 ? + : -
+          speed = past > 0 ? 0.32 : -0.32;
+          steer = 0;
+        } else if (lat > 0.006) {
+          speed = -0.22;
+          steer = angleInSteer * 0.12;
+        } else {
+          break;
+        }
+        const before = { x: state.x, y: state.y };
+        let moved = integrateBicycle(
+          state,
+          speed,
+          steer,
+          dt,
+          vehicle,
+          curbLine,
+          parked,
+          carMargin
+        );
+        if (!moved && speed < 0) {
+          moved = integrateBicycle(
+            state,
+            0.65,
+            steerTowardHeading(state.angle, finishAng, false, maxSteer),
+            dt,
+            vehicle,
+            curbLine,
+            parked,
+            carMargin
+          );
+        }
+        if (!moved || Math.hypot(state.x - before.x, state.y - before.y) < 1e-6) break;
+        rec();
+      }
+
+      return { state: state, ok: poseLooksParked(state) };
+    }
+
+    // Pick first candidate that parks successfully
+    let chosen = null;
+    let chosenPull = null;
+    for (let ci = 0; ci < parkCandidates.length; ci++) {
+      const opts = parkCandidates[ci];
+      const pull = pullFromCandidate(opts);
+      if (
+        !poseClearsDemo(
+          pull.x,
+          pull.y,
+          pull.angle,
+          vehicle,
+          curbLine,
+          parked,
+          opts.margin
+        )
+      ) {
+        continue;
+      }
+      const trial = simulateParkFromPull(pull, opts, null);
+      if (trial.ok) {
+        chosen = opts;
+        chosenPull = pull;
+        break;
+      }
+    }
+    if (!chosen) {
+      chosen = parkCandidates[0];
+      chosenPull = pullFromCandidate(chosen);
+    }
+
+    // Build final pose list: spawn → pull → park
+    const poses = [];
+    const state = { x: spawn.x, y: spawn.y, angle: spawn.angle };
+    const carMargin = chosen.margin;
     let recordSkip = 0;
     function record(force) {
       if (!force && recordSkip++ % 2 === 1 && poses.length > 0) return;
@@ -837,7 +1102,7 @@
       for (let i = 0; i < stepsMax; i++) {
         const before = { x: state.x, y: state.y, angle: state.angle };
         const steer = typeof steerFn === "number" ? steerFn : steerFn(state, i);
-        const ok = integrateBicycle(
+        let ok = integrateBicycle(
           state,
           speed,
           steer,
@@ -848,18 +1113,17 @@
           carMargin
         );
         if (!ok) {
-          if (
-            !integrateBicycle(
-              state,
-              speed * 0.45,
-              steer,
-              dt,
-              vehicle,
-              curbLine,
-              parked,
-              carMargin
-            )
-          ) {
+          ok = integrateBicycle(
+            state,
+            speed * 0.45,
+            steer,
+            dt,
+            vehicle,
+            curbLine,
+            parked,
+            carMargin
+          );
+          if (!ok) {
             stalled++;
             if (stalled > 5) break;
             continue;
@@ -875,12 +1139,10 @@
         }
         if (doneFn && doneFn(state, i)) break;
       }
-      return stalled > 5;
     }
 
     record(true);
-
-    // 1) Forward to pull-up
+    const pull = chosenPull;
     drive(
       3.8,
       function (s) {
@@ -913,185 +1175,55 @@
     );
     hold(8);
 
-    // 2) Reverse clear of the lead (front) car
-    drive(-1.65, 0, clearN, null);
+    // Snap near pull then run the successful park sim into poses
+    state.x = pull.x;
+    state.y = pull.y;
+    state.angle = pull.angle;
+    record(true);
+    simulateParkFromPull(pull, chosen, poses);
 
-    // 3) Angle-in toward curb — OBB rejects any pose that clips the trailing car
-    drive(
-      -2.0,
-      angleInSteer,
-      110,
-      function (s) {
-        return Math.abs(wrapAngle(s.angle - angleIn)) < 0.07;
-      }
-    );
-
-    // 4) Brief hold while still reverse
-    drive(-1.7, 0, holdN, function (s) {
-      return pastBayCenter(s) > -0.5;
-    });
-
-    // 5) Counter-steer straighten; hard-stop before bay center so rear stays off trailer
-    let blocked = drive(
-      -1.45,
-      straightenSteer,
-      strN,
-      function (s) {
-        if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.1) return true;
-        if (pastBayCenter(s) > 0.28) return true;
-        return false;
-      }
-    );
-
-    // 6–7) Multi-point: if still angled/high, forward with angle-in steer
-    // (straightens toward finish without diving into trailer), then shallow reverse bite.
-    // Repeat up to 3 times for long / low-steer vehicles.
-    const cycles = len >= 5.5 ? 3 : len >= 4.8 ? 2 : 1;
-    for (let cyc = 0; cyc < cycles; cyc++) {
-      const dist = Math.hypot(state.x - fin.x, state.y - fin.y);
-      const angErr = Math.abs(wrapAngle(state.angle - finishAng));
-      const lat = latToFin(state);
-      if (dist < 0.85 && angErr < 0.14 && lat < 1.05) break;
-
-      // Forward: angle-in steer while going forward turns nose back toward street/finish
-      // and slides the rear away from the trailing neighbour.
-      if (angErr > 0.1 || blocked || lat > 1.1) {
-        blocked = drive(
-          1.25,
-          angleInSteer,
-          48,
-          function (s) {
-            return Math.abs(wrapAngle(s.angle - finishAng)) < 0.1;
-          }
-        );
-        // Nudge a little street-side if still overlapping the reverse corridor
-        if (pastBayCenter(state) > 0.15) {
-          drive(
-            1.0,
-            function (s) {
-              return steerTowardHeading(s.angle, finishAng, false, maxSteer * 0.7);
-            },
-            18,
-            function (s) {
-              return pastBayCenter(s) < 0.05;
-            }
-          );
-        }
-      }
-
-      // Shallow reverse bite toward curb, then straighten — stop before trailer
-      const biteAng = finishAng + turnSign * Math.max(0.22, angMag * 0.55);
-      drive(
-        -1.55,
-        function (s) {
-          return steerTowardHeading(s.angle, biteAng, true, maxSteer);
-        },
-        42,
-        function (s) {
-          return (
-            Math.abs(wrapAngle(s.angle - biteAng)) < 0.08 ||
-            pastBayCenter(s) > 0.2
-          );
-        }
-      );
-      blocked = drive(
-        -1.3,
-        straightenSteer,
-        50,
-        function (s) {
-          if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.1) return true;
-          if (pastBayCenter(s) > 0.3) return true;
-          return false;
-        }
-      );
-    }
-
-    // Final forward straighten if still cocked
-    if (Math.abs(wrapAngle(state.angle - finishAng)) > 0.12) {
-      drive(
-        1.15,
-        function (s) {
-          return steerTowardHeading(s.angle, finishAng, false, maxSteer);
-        },
-        40,
-        function (s) {
-          return Math.abs(wrapAngle(s.angle - finishAng)) < 0.1;
-        }
-      );
-    }
-
-    // 8) Creep along bay axis; never reverse past center into trailing car
-    for (let k = 0; k < 180; k++) {
-      const dx = fin.x - state.x;
-      const dy = fin.y - state.y;
-      const dist = Math.hypot(dx, dy);
-      const angErr = Math.abs(wrapAngle(state.angle - finishAng));
-      if (dist < 0.3 && angErr < 0.12) break;
-      const along = dx * Math.cos(state.angle) + dy * Math.sin(state.angle);
-      const past = pastBayCenter(state);
-      const lat = latToFin(state);
-      let speed = 0;
-      // Prefer reverse only while still short of bay center
-      if (along < -0.05 && past < 0.28) speed = -1.05;
-      else if (along > 0.05 && past > -0.5) speed = 0.95;
-      else if (lat > 0.9 && past < 0.15) {
-        // still street-high: tiny reverse with slight curb bite
-        speed = -0.7;
-      } else if (angErr > 0.12 && past < 0.15) speed = -0.35;
-      if (speed === 0) {
-        if (angErr < 0.12 || dist < 1.0) break;
-        speed = past > 0.25 ? 0.4 : -0.25;
-      }
-      if (speed < 0 && past > 0.32) {
-        if (dist < 1.15) break;
-        speed = 0.45;
-      }
-      let steer = steerTowardHeading(
-        state.angle,
-        finishAng,
-        speed < 0,
-        maxSteer * 0.4
-      );
-      // Soft curb-ward bias while reversing if still high (bicycle only — small steer)
-      if (speed < 0 && lat > 0.85 && angErr < 0.35) {
-        steer = angleInSteer * 0.35 + steer * 0.65;
-      }
-      const before = { x: state.x, y: state.y };
-      const moved = integrateBicycle(
-        state,
-        speed,
-        steer,
-        dt,
-        vehicle,
-        curbLine,
-        parked,
-        carMargin
-      );
-      if (moved && Math.hypot(state.x - before.x, state.y - before.y) > 1e-6) {
-        record(false);
-      } else {
-        // If reverse blocked by trailer OBB, try a short forward instead of stalling
-        if (speed < 0) {
-          const fwd = integrateBicycle(
-            state,
-            0.55,
-            steerTowardHeading(state.angle, finishAng, false, maxSteer * 0.5),
-            dt,
-            vehicle,
-            curbLine,
-            parked,
-            carMargin
-          );
-          if (fwd) record(false);
+    // Sync outer state to last recorded pose, then hold on that pose
+    if (poses.length) {
+      const last = poses[poses.length - 1];
+      state.x = last.x;
+      state.y = last.y;
+      state.angle = last.angle;
+      if (!poseLooksParked(last)) {
+        // Last-resort micro-settle toward fin
+        for (let i = 0; i < 80 && !poseLooksParked(state); i++) {
+          const lat = latToFin(state);
+          const past = pastBayCenter(state);
+          const angE = wrapAngle(state.angle - finishAng);
+          let speed = 0;
+          if (lat > 0.02) speed = -0.4;
+          else if (Math.abs(past) > 0.02) speed = past > 0 ? 0.35 : -0.35;
+          else if (Math.abs(angE) > 0.01) speed = past > 0 ? 0.3 : -0.3;
           else break;
-        } else {
-          break;
+          const steer =
+            lat > 0.02
+              ? angleInSteer * 0.2
+              : steerTowardHeading(state.angle, finishAng, speed < 0, maxSteer);
+          if (
+            !integrateBicycle(
+              state,
+              speed,
+              steer,
+              dt,
+              vehicle,
+              curbLine,
+              parked,
+              chosen.margin
+            )
+          ) {
+            break;
+          }
+          poses.push({ x: state.x, y: state.y, angle: state.angle });
         }
       }
+      hold(16);
     }
-    hold(12);
 
-    const duration = Math.max(7, Math.min(12, poses.length / 30));
+    const duration = Math.max(8, Math.min(16, poses.length / 28));
     return {
       id: lvl.id,
       poses: poses,
