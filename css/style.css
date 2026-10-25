@@ -226,6 +226,13 @@ html, body {
   font-size: 0.78rem;
   line-height: 1.5;
 }
+.hint-keys strong { color: var(--accent); font-weight: 700; }
+.hint-cam {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--blue);
+  font-size: 0.74rem;
+}
 kbd {
   display: inline-block;
   background: #1e2c44;
@@ -322,17 +329,19 @@ kbd {
   pointer-events: auto;
 }
 .touch-btn {
-  width: 56px;
+  min-width: 64px;
   height: 56px;
+  padding: 0 8px;
   border-radius: 14px;
   border: 1px solid #3a5070;
   background: rgba(18, 28, 46, 0.75);
   color: var(--text);
-  font-size: 1.1rem;
+  font-size: 0.78rem;
   font-weight: 800;
   backdrop-filter: blur(4px);
   -webkit-user-select: none;
   user-select: none;
+  white-space: nowrap;
 }
 .touch-btn:active { background: rgba(74, 222, 128, 0.25); }
 

@@ -30,7 +30,14 @@
         </div>
 
         <button id="btn-start" class="btn btn-primary btn-lg" type="button">Start driving</button>
-        <p class="hint-keys">Keyboard: <kbd>↑</kbd><kbd>W</kbd> accelerate · <kbd>↓</kbd><kbd>S</kbd> brake/reverse · <kbd>←</kbd><kbd>→</kbd><kbd>A</kbd><kbd>D</kbd> steer · <kbd>Space</kbd> handbrake · <kbd>R</kbd> restart</p>
+        <p class="hint-keys">
+          <strong>Steering wheel:</strong> <kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> = steer only
+          · <kbd>↑</kbd><kbd>W</kbd> accelerate
+          · <kbd>↓</kbd><kbd>S</kbd> brake / reverse
+          · <kbd>Space</kbd> handbrake
+          · <kbd>R</kbd> restart
+          <br /><span class="hint-cam">Camera follows your car — front always toward the top of the screen.</span>
+        </p>
       </div>
     </section>
 
@@ -56,15 +63,15 @@
         <canvas id="game" width="960" height="640" aria-label="Parking lot game canvas"></canvas>
         <div id="touch-controls" class="touch-controls" aria-hidden="true">
           <div class="touch-col">
-            <button class="touch-btn" data-key="ArrowLeft" type="button">◀</button>
-            <button class="touch-btn" data-key="ArrowRight" type="button">▶</button>
+            <button class="touch-btn" data-key="ArrowLeft" type="button" title="Steer left">◀ Steer</button>
+            <button class="touch-btn" data-key="ArrowRight" type="button" title="Steer right">Steer ▶</button>
           </div>
           <div class="touch-col">
             <button class="touch-btn" data-key=" " type="button">HB</button>
           </div>
           <div class="touch-col">
-            <button class="touch-btn" data-key="ArrowUp" type="button">▲</button>
-            <button class="touch-btn" data-key="ArrowDown" type="button">▼</button>
+            <button class="touch-btn" data-key="ArrowUp" type="button" title="Accelerate">▲ Gas</button>
+            <button class="touch-btn" data-key="ArrowDown" type="button" title="Brake / reverse">▼ Brake</button>
           </div>
         </div>
       </div>

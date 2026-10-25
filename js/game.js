@@ -269,23 +269,21 @@
     return true;
   }
 
-  // ——— Render ———
-  function worldToScreen(x, y, cam) {
-    // Fit world into canvas with letterbox
-    const lvl = level();
-    const fit = Math.min(CANVAS_W / lvl.worldW, CANVAS_H / lvl.worldH);
-    const ox = (CANVAS_W - lvl.worldW * fit) / 2;
-    const oy = (CANVAS_H - lvl.worldH * fit) / 2;
-    return {
-      x: ox + x * fit,
-      y: oy + y * fit,
-      fit,
-    };
-  }
+  // ——— Render (chase camera) ———
+  // World angle 0 = facing +X. Camera rotates so car forward points to screen top (-Y).
+  const CAMERA_UP_OFFSET = -Math.PI / 2;
 
   function getFit() {
-    const lvl = level();
-    return Math.min(CANVAS_W / lvl.worldW, CANVAS_H / lvl.worldH);
+    // Pixels per world unit — keep a comfortable chase framing around the car
+    const viewSpan = 20; // world units across the shorter canvas axis
+    return Math.min(CANVAS_W, CANVAS_H) / viewSpan;
+  }
+
+  /** Apply chase transform: car at origin of subsequent draws, nose toward screen top. */
+  function beginChaseCamera(c, car, fit) {
+    c.translate(CANVAS_W / 2, CANVAS_H / 2);
+    c.rotate(-(car.angle) + CAMERA_UP_OFFSET);
+    c.translate(-car.x * fit, -car.y * fit);
   }
 
   function drawRoundedRect(c, x, y, w, h, r) {
@@ -403,26 +401,48 @@
     c.fillRect(x - r * 0.35, y - r * 0.2, r * 0.7, r * 0.35);
   }
 
+  function drawPlayerCarScreenFixed(c, car, fit) {
+    // Car drawn at canvas center, nose toward top (local +X after -90°).
+    c.save();
+    c.translate(CANVAS_W / 2, CANVAS_H / 2);
+    c.rotate(CAMERA_UP_OFFSET);
+    const ghostCar = {
+      x: 0,
+      y: 0,
+      angle: 0,
+      length: car.length,
+      width: car.width,
+      color: car.color,
+      roof: car.roof,
+      window: car.window,
+      flashing: car.flashing,
+    };
+    drawVehicleShape(c, ghostCar, fit, false);
+    c.restore();
+  }
+
   function render() {
     const lvl = level();
     const fit = getFit();
-    const ox = (CANVAS_W - lvl.worldW * fit) / 2;
-    const oy = (CANVAS_H - lvl.worldH * fit) / 2;
+    const car = state.car;
 
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Outer void
+    // Outer void (screen-fixed)
     ctx.fillStyle = "#070d18";
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    ctx.save();
-    ctx.translate(ox, oy);
+    if (!car) return;
 
-    // Asphalt
+    // ——— World layer (chase camera: centered on car, rotated so nose = up) ———
+    ctx.save();
+    beginChaseCamera(ctx, car, fit);
+
+    // Asphalt lot
     ctx.fillStyle = "#1e2530";
     ctx.fillRect(0, 0, lvl.worldW * fit, lvl.worldH * fit);
 
-    // Subtle asphalt noise stripes
+    // Subtle asphalt stripes
     ctx.strokeStyle = "rgba(255,255,255,0.03)";
     ctx.lineWidth = 1;
     for (let i = 0; i < lvl.worldW; i += 2) {
@@ -431,6 +451,11 @@
       ctx.lineTo(i * fit, lvl.worldH * fit);
       ctx.stroke();
     }
+
+    // Soft vignette edge beyond lot
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 8;
+    ctx.strokeRect(-4, -4, lvl.worldW * fit + 8, lvl.worldH * fit + 8);
 
     // Walls / curbs
     for (const w of lvl.walls || []) {
@@ -450,10 +475,8 @@
     }
     if (markings.exitZone) {
       drawBay(ctx, { ...markings.exitZone, angle: 0 }, fit, true, "EXIT ZONE");
-      // Relabel
     }
 
-    // Explicit target highlight if no matching bay
     if (target && !markings.exitZone) {
       const matched = (markings.bays || []).some(
         (b) => Math.abs(b.x - target.x) < 0.01 && Math.abs(b.y - target.y) < 0.01
@@ -471,7 +494,7 @@
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Obstacles
+    // Obstacles (world-rotated with the lot)
     for (const o of lvl.obstacles || []) {
       if (o.kind === "car") {
         drawVehicleShape(ctx, o, fit, true);
@@ -480,21 +503,33 @@
       }
     }
 
-    // Player
-    if (state.car) drawVehicleShape(ctx, state.car, fit, false);
+    ctx.restore();
 
-    // Mini tip banner first level
-    if (state.running && state.levelIndex === 0 && state.time < 8) {
-      ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
-      const tw = lvl.worldW * fit;
-      ctx.fillRect(tw * 0.1, 12, tw * 0.8, 36);
+    // ——— Player car: screen-centered, always nose-up (not double-rotated) ———
+    drawPlayerCarScreenFixed(ctx, car, fit);
+
+    // ——— Screen-fixed overlays (HUD tips on canvas; DOM HUD stays fixed too) ———
+    if (state.running && state.levelIndex === 0 && state.time < 10) {
+      ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+      ctx.fillRect(CANVAS_W * 0.12, 14, CANVAS_W * 0.76, 52);
       ctx.fillStyle = "#e2e8f0";
-      ctx.font = `600 ${Math.max(12, fit * 0.48)}px Segoe UI, sans-serif`;
+      ctx.font = "600 14px Segoe UI, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("Pull past the gap → reverse in → straighten · Space = handbrake", tw / 2, 35);
+      ctx.fillText("Left / Right (A D) = steering wheel · Up = gas · Down = brake / reverse", CANVAS_W / 2, 34);
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "12px Segoe UI, sans-serif";
+      ctx.fillText("Camera follows you — car front stays at the top. Pull past the gap, reverse in, straighten.", CANVAS_W / 2, 52);
     }
 
-    ctx.restore();
+    // Compact control strip (always visible while playing)
+    if (state.running && !state.won && !state.failed) {
+      ctx.fillStyle = "rgba(15, 23, 42, 0.55)";
+      ctx.fillRect(12, CANVAS_H - 36, 340, 24);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = "11px Segoe UI, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("←→ steer   ↑ gas   ↓ brake/rev   Space handbrake   R restart", 20, CANVAS_H - 20);
+    }
   }
 
   // ——— HUD / UI ———
@@ -633,8 +668,6 @@
     // drawVehicleShape expects world*fit translation — we passed x=0,y=0 so OK
     c.restore();
   }
-
-  // Fix: drawVehicleShape multiplies x*fit — with x=0 it's fine at origin after translate.
 
   function buildVehiclePicker() {
     const root = document.getElementById("vehicle-picker");

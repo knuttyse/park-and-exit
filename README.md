@@ -16,11 +16,13 @@ python3 -m http.server 8080 --directory .
 
 | Input | Action |
 |--------|--------|
+| **← → / A D** | **Steer** (steering wheel only — not camera) |
 | ↑ / W | Accelerate |
 | ↓ / S | Brake / reverse |
-| ← → / A D | Steer |
 | Space | Handbrake |
 | R | Restart level |
+
+The camera is chase-style: your car stays centered and the **front of the car always points to the top of the screen**. The parking lot rotates around you. HUD and menus stay fixed.
 
 On touch devices, on-screen buttons appear for steer, throttle, and handbrake.
 

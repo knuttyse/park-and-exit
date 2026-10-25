@@ -9,7 +9,7 @@ window.PARK_LEVELS = [
     name: "1 · Parallel park",
     mode: "Park in",
     short: "Slide into the curb-side parallel bay between two cars.",
-    tip: "Pull past the gap, reverse, then straighten. Use small steering corrections.",
+    tip: "←→ / A D = steer. Pull past the gap, reverse in, then straighten.",
     worldW: 42,
     worldH: 26,
     walls: [
@@ -46,7 +46,7 @@ window.PARK_LEVELS = [
     name: "2 · Reverse into bay",
     mode: "Park in",
     short: "Back into a perpendicular bay between two parked cars.",
-    tip: "Line up, reverse slowly, and straighten once the rear is in the bay.",
+    tip: "←→ steer to line up, reverse slowly, straighten once the rear is in.",
     worldW: 36,
     worldH: 28,
     walls: [
@@ -83,7 +83,7 @@ window.PARK_LEVELS = [
     name: "3 · Exit parallel spot",
     mode: "Drive out",
     short: "Leave a tight parallel bay without clipping neighbours.",
-    tip: "Reverse a little with right steer, then pull forward clear of the cars.",
+    tip: "←→ steer: reverse a little while turning, then pull forward to clear.",
     worldW: 42,
     worldH: 26,
     walls: [
@@ -113,7 +113,7 @@ window.PARK_LEVELS = [
     name: "4 · Exit bay",
     mode: "Drive out",
     short: "Drive out of a bay squeezed between two cars.",
-    tip: "Creep forward, straighten in the aisle, then clear the exit zone.",
+    tip: "↑ creep out, ←→ straighten in the aisle, then reach the exit zone.",
     worldW: 36,
     worldH: 28,
     walls: [
@@ -144,7 +144,7 @@ window.PARK_LEVELS = [
     name: "5 · Tight challenge",
     mode: "Challenge",
     short: "Parallel park into a shorter gap — wagon or lorry recommended.",
-    tip: "Patience beats power. Multi-point the reverse and keep speed low.",
+    tip: "←→ for small steering corrections. Multi-point reverse; keep speed low.",
     worldW: 40,
     worldH: 26,
     walls: [
