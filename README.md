@@ -38,13 +38,8 @@ Generic names only (no trademarks):
 
 ## Levels
 
-1. Parallel park (pull in)
-2. Reverse into bay (perpendicular)
-3. Drive out of a tight parallel spot
-4. Drive out of a bay between two cars
-5. Challenge: tighter parallel gap
+24 levels with rising difficulty: parallel in/out, perpendicular bay park & exit, angle parking, narrow lanes, dead ends, cone funnels, and wagon/lorry challenges. Pick any level from the menu; Next advances in order after a success.
 
-Success: most of the car inside the target (or exit zone), acceptable alignment, and nearly stopped. Soft bumps are allowed; too many bumps prompts a retry.
 
 ## GitHub Pages
 

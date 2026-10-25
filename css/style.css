@@ -144,6 +144,10 @@ html, body {
 .level-list {
   display: grid;
   gap: 8px;
+  max-height: min(340px, 42vh);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
 }
 .level-card {
   display: grid;
