@@ -17,6 +17,72 @@
     return { x: cx + lx * c - ly * s, y: cy + lx * s + ly * c };
   }
 
+  function obbCorners(x, y, length, width, angle) {
+    const hx = length / 2;
+    const hy = width / 2;
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    return [
+      { x: x + (-hx) * c - (-hy) * s, y: y + (-hx) * s + (-hy) * c },
+      { x: x + hx * c - (-hy) * s, y: y + hx * s + (-hy) * c },
+      { x: x + hx * c - hy * s, y: y + hx * s + hy * c },
+      { x: x + (-hx) * c - hy * s, y: y + (-hx) * s + hy * c },
+    ];
+  }
+
+  /**
+   * Push a car-sized hint box toward the street until the full footprint
+   * stays on the street side of the curb line (no sidewalk swing).
+   */
+  function clampBoxToCurb(box, curbLine, pad) {
+    if (!curbLine) return box;
+    pad = pad != null ? pad : 0.04;
+    let guard = 0;
+    while (guard++ < 12) {
+      const corners = obbCorners(box.x, box.y, box.w, box.h, box.angle);
+      let worst = Infinity;
+      for (let i = 0; i < corners.length; i++) {
+        const p = corners[i];
+        const d =
+          (p.x - curbLine.ox) * curbLine.nx + (p.y - curbLine.oy) * curbLine.ny;
+        if (d < worst) worst = d;
+      }
+      if (worst >= pad) break;
+      const push = pad - worst;
+      box.x += curbLine.nx * push;
+      box.y += curbLine.ny * push;
+    }
+    return box;
+  }
+
+  function getCurbLine(lvl) {
+    if (lvl.curbLine) return lvl.curbLine;
+    // Derive from tagged curb wall + parallel meta if prepareLevel already ran
+    const meta = lvl.parallel;
+    if (!meta || !lvl.target) return null;
+    const ang = meta.angle || 0;
+    const curbSide = meta.curbSide == null ? -1 : meta.curbSide;
+    const street = -curbSide;
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    const bh = lvl.target.h || 2;
+    const face = localToWorld(
+      meta.center.x,
+      meta.center.y,
+      ang,
+      0,
+      curbSide * (bh / 2)
+    );
+    return {
+      ox: face.x,
+      oy: face.y,
+      nx: -street * s,
+      ny: street * c,
+      ang: ang,
+      curbSide: curbSide,
+    };
+  }
+
   /** Classify prepared (or base) level into a hint script family. */
   function classifyHintType(lvl) {
     if (!lvl || !lvl.target) return "bay";
@@ -97,6 +163,7 @@
     const bh = lvl.target.h;
     const curbSide = meta.curbSide == null ? -1 : meta.curbSide;
     const street = -curbSide;
+    const curbLine = getCurbLine(lvl);
     const spawn = lvl.spawn || { angle: ang + Math.PI };
     const travelAlong = Math.cos(spawn.angle - ang) >= 0 ? 1 : -1;
     const neigh = findRowNeighbours(lvl, cx, cy, ang);
@@ -106,43 +173,43 @@
       ? (lead.x - cx) * Math.cos(ang) + (lead.y - cy) * Math.sin(ang)
       : travelAlong * (bw / 2 + 0.12 + vehicle.length * 0.5);
 
-    const latGap = 0.5 + vehicle.width * 0.12;
+    // Pull-up stays fully on the street — lateral gap from bay, never over curb
+    const latGap = 0.45 + vehicle.width * 0.1;
     const pullLy = street * (bh / 2 + latGap + vehicle.width / 2);
-    // Align roughly with lead car center (classic "pull up alongside")
     const pull = localToWorld(cx, cy, ang, leadAlong, pullLy);
     const pullAng = travelAlong > 0 ? ang : ang + Math.PI;
 
-    // Step 2: first reverse angle — rear toward bay, ~40–45° toward curb
+    // Shallower angles so the footprint can stay street-side of a flush curb
     const turnSign = -curbSide * (travelAlong > 0 ? 1 : -1);
-    // When reversing from pull-up into curb: rotate heading toward curb
-    const angleIn = pullAng + turnSign * 0.75;
+    const angleIn = pullAng + turnSign * 0.55; // ~31°
+    const angleMid = pullAng + turnSign * 0.28;
+
+    // Keep reverse/straighten centers toward street of bay center
     const a2 = localToWorld(
       cx,
       cy,
       ang,
-      travelAlong * (bw * 0.05),
-      street * (vehicle.width * 0.15)
+      travelAlong * (bw * 0.12),
+      street * (vehicle.width * 0.22)
     );
-
-    // Step 3: counter-steer / deeper in bay, shallower angle
-    const angleMid = pullAng + turnSign * 0.35;
     const a3 = localToWorld(
       cx,
       cy,
       ang,
-      -travelAlong * (vehicle.length * 0.05),
-      street * (vehicle.width * 0.02)
+      -travelAlong * (vehicle.length * 0.02),
+      street * (vehicle.width * 0.08)
     );
 
-    // Step 4: final in green bay (preferred target heading)
-    const finalAng = ang;
-
-    return [
+    const steps = [
       carBox(pull.x, pull.y, pullAng, vehicle, "1 · Pull up"),
       carBox(a2.x, a2.y, angleIn, vehicle, "2 · Reverse in"),
       carBox(a3.x, a3.y, angleMid, vehicle, "3 · Straighten"),
-      carBox(cx, cy, finalAng, vehicle, "4 · Finish"),
+      carBox(cx, cy, ang, vehicle, "4 · Finish"),
     ];
+    for (let i = 0; i < steps.length; i++) {
+      clampBoxToCurb(steps[i], curbLine, 0.05);
+    }
+    return steps;
   }
 
   function buildBayReverseSteps(lvl, vehicle) {
@@ -251,23 +318,30 @@
     const cy = (lvl.spawn && lvl.spawn.y) || lvl.target.y;
     const curbSide = meta.curbSide == null ? -1 : meta.curbSide;
     const street = -curbSide;
-    const bh = (lvl.target && !lvl.target.exit ? lvl.target.h : null) || vehicle.width * 1.1;
-    // Reverse back a touch, then angle toward street, then drive to exit
-    const back = localToWorld(cx, cy, ang, -vehicle.length * 0.2, 0);
+    const curbLine = getCurbLine(lvl);
+    const bh =
+      (lvl.target && !lvl.target.exit ? lvl.target.h : null) ||
+      vehicle.width * 1.1;
+    // Ease back in-bay (street of curb), then angle out toward street, then exit
+    const back = localToWorld(cx, cy, ang, -vehicle.length * 0.15, street * 0.05);
     const swing = localToWorld(
       cx,
       cy,
       ang,
-      vehicle.length * 0.15,
+      vehicle.length * 0.2,
       street * (bh / 2 + vehicle.width * 0.55)
     );
     const t = lvl.target;
     const leaveAng = Math.atan2(t.y - cy, t.x - cx);
-    return [
+    const steps = [
       carBox(back.x, back.y, ang, vehicle, "1 · Ease back"),
       carBox(swing.x, swing.y, ang + street * 0.55, vehicle, "2 · Angle out"),
       carBox(t.x, t.y, leaveAng, vehicle, "3 · Exit zone"),
     ];
+    // Only clamp in-bay steps; exit zone is away from curb
+    clampBoxToCurb(steps[0], curbLine, 0.05);
+    clampBoxToCurb(steps[1], curbLine, 0.05);
+    return steps;
   }
 
   /**
@@ -325,5 +399,7 @@
     classifyHintType: classifyHintType,
     buildHintSteps: buildHintSteps,
     carMatchesHintStep: carMatchesHintStep,
+    clampBoxToCurb: clampBoxToCurb,
+    getCurbLine: getCurbLine,
   };
 })();

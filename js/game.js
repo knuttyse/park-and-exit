@@ -138,15 +138,30 @@
     lvl.walls = (lvl.walls || []).filter(function (w) {
       return !(w.h < 0.6 && w.w > lvl.worldW * 0.4);
     });
-    // Curb flush with sidewalk long edge (AABB for angle≈0 parallel lots)
+    // Curb flush with sidewalk long edge. Street-face = bay outer long edge.
+    // Body may scrape (soft); wheels must not cross past the street-face line.
     const curbLy = curbSide * (bh / 2 + bay.curbThick / 2);
     const curbPos = localToWorld(0, curbLy);
+    const face = localToWorld(0, curbSide * (bh / 2));
+    const street = -curbSide;
+    // Local (0, street) → world normal pointing toward street / roadway
+    const snx = -street * s;
+    const sny = street * c;
     lvl.walls.push({
       x: lvl.worldW / 2,
       y: curbPos.y,
       w: lvl.worldW,
       h: bay.curbThick,
+      curb: true,
     });
+    lvl.curbLine = {
+      ox: face.x,
+      oy: face.y,
+      nx: snx,
+      ny: sny,
+      ang: ang,
+      curbSide: curbSide,
+    };
 
     // Drop previous framing cars on the same curb row; place tight neighbours
     lvl.obstacles = (lvl.obstacles || []).filter(function (o) {
@@ -563,12 +578,93 @@
   }
 
   // ——— Collisions ———
+  /** Four wheel contact points from bicycle geometry (front/rear × left/right). */
+  function carWheelPositions(car) {
+    const c = Math.cos(car.angle);
+    const s = Math.sin(car.angle);
+    const halfWb = (car.wheelbase || car.length * 0.62) * 0.5;
+    const halfTrack = car.width * 0.42;
+    const pts = [
+      [halfWb, halfTrack],
+      [halfWb, -halfTrack],
+      [-halfWb, halfTrack],
+      [-halfWb, -halfTrack],
+    ];
+    return pts.map(function (p) {
+      return {
+        x: car.x + p[0] * c - p[1] * s,
+        y: car.y + p[0] * s + p[1] * c,
+      };
+    });
+  }
+
+  /**
+   * Hard constraint: no wheel may cross past the curb street-face into the sidewalk.
+   * Slides the car along the curb (push along street normal) and damps speed into the curb.
+   */
+  function constrainWheelsToCurb(car, curbLine) {
+    if (!curbLine) return false;
+    const wheels = carWheelPositions(car);
+    let worst = 0; // most negative = deepest into sidewalk
+    for (let i = 0; i < wheels.length; i++) {
+      const w = wheels[i];
+      const d = (w.x - curbLine.ox) * curbLine.nx + (w.y - curbLine.oy) * curbLine.ny;
+      if (d < worst) worst = d;
+    }
+    if (worst >= -0.002) return false;
+    const push = -worst;
+    car.x += curbLine.nx * push;
+    car.y += curbLine.ny * push;
+    // Velocity into sidewalk (heading · -streetNormal) * speed sign
+    const into =
+      Math.cos(car.angle) * -curbLine.nx + Math.sin(car.angle) * -curbLine.ny;
+    if (car.speed * into > 0.05) {
+      // Kill the into-sidewalk component: slide along curb
+      car.speed *= 0.35;
+      if (Math.abs(car.speed) < 0.35) car.speed = 0;
+    }
+    return true;
+  }
+
+  /**
+   * Soft body scrape on curb volume — bump feedback, light push, body may overhang.
+   * Wheels are kept street-side separately.
+   */
+  function softCurbBodyBump(car, curbWall) {
+    const body = {
+      x: car.x,
+      y: car.y,
+      length: car.length,
+      width: car.width,
+      angle: car.angle,
+    };
+    const solid = {
+      x: curbWall.x,
+      y: curbWall.y,
+      length: curbWall.w,
+      width: curbWall.h,
+      angle: 0,
+    };
+    const hitInfo = satOverlap(body, solid);
+    if (!hitInfo) return false;
+    car.x += hitInfo.pushX * 0.28;
+    car.y += hitInfo.pushY * 0.28;
+    car.speed *= 0.72;
+    if (Math.abs(car.speed) < 0.25) car.speed = 0;
+    return true;
+  }
+
   function resolveCollisions(car, lvl) {
     let hit = false;
     const body = { x: car.x, y: car.y, length: car.length, width: car.width, angle: car.angle };
 
     const solids = [];
+    const curbWalls = [];
     for (const w of lvl.walls || []) {
+      if (w.curb) {
+        curbWalls.push(w);
+        continue; // not a hard full-body wall
+      }
       solids.push({ x: w.x, y: w.y, length: w.w, width: w.h, angle: 0, kind: "wall" });
     }
     for (const o of lvl.obstacles || []) {
@@ -585,16 +681,19 @@
       hit = true;
       car.x += hitInfo.pushX * 1.05;
       car.y += hitInfo.pushY * 1.05;
-      // Bounce velocity
-      const vn = car.speed * (Math.cos(car.angle) * hitInfo.nx + Math.sin(car.angle) * hitInfo.ny);
-      if (vn > 0) {
-        // moving into the surface along push? push points out of B for A
-      }
       car.speed *= -0.25;
       if (Math.abs(car.speed) < 0.4) car.speed = 0;
       body.x = car.x;
       body.y = car.y;
     }
+
+    // Soft curb body scrape (counts as bump)
+    for (let i = 0; i < curbWalls.length; i++) {
+      if (softCurbBodyBump(car, curbWalls[i])) hit = true;
+    }
+
+    // Wheels cannot roll past curb street-face (no bump spam — just constraint)
+    constrainWheelsToCurb(car, lvl.curbLine);
 
     // Keep in soft world bounds
     car.x = clamp(car.x, 0.5, lvl.worldW - 0.5);
@@ -881,7 +980,8 @@
 
     // Walls / curbs
     for (const w of lvl.walls || []) {
-      ctx.fillStyle = w.h < 1 && w.w > 5 ? "#94a3b8" : "#334155";
+      if (w.curb) ctx.fillStyle = "#a8b4c4";
+      else ctx.fillStyle = w.h < 1 && w.w > 5 ? "#94a3b8" : "#334155";
       ctx.fillRect((w.x - w.w / 2) * fit, (w.y - w.h / 2) * fit, w.w * fit, w.h * fit);
     }
 
