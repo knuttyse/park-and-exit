@@ -25,6 +25,7 @@
     camera: { x: 0, y: 0 },
     lastTs: 0,
     tutorialFlash: 0,
+    activeLevel: null,
   };
 
   const canvas = document.getElementById("game");
@@ -58,7 +59,188 @@
   }
 
   function level() {
+    return state.activeLevel || window.PARK_LEVELS[state.levelIndex];
+  }
+
+  function baseLevel() {
     return window.PARK_LEVELS[state.levelIndex];
+  }
+
+  /**
+   * Near-minimum parallel bay for the selected vehicle.
+   * Length clearance ~10%, width ~6% — tight but completable.
+   */
+  function minParallelBay(vehicle) {
+    return {
+      length: vehicle.length * 1.1,
+      width: vehicle.width * 1.06,
+      angleTol: 0.12,
+      coverFrac: 0.9,
+      speedMax: 0.42,
+      endGap: 0.12,
+      curbThick: 0.4,
+      neighbourLength: Math.max(4.3, Math.min(5.2, vehicle.length * 0.95)),
+      neighbourWidth: Math.max(1.7, Math.min(2.05, vehicle.width * 0.98)),
+    };
+  }
+
+  function cloneLevel(lvl) {
+    return JSON.parse(JSON.stringify(lvl));
+  }
+
+  /**
+   * Rebuild parallel bay/target/curb/end-cars from the selected vehicle.
+   * Curb is flush with the sidewalk-side long edge (no free swing space).
+   */
+  function applyParallelLayout(lvl, vehicle) {
+    const meta = lvl.parallel;
+    if (!meta) return lvl;
+    const bay = minParallelBay(vehicle);
+    const ang = meta.angle || 0;
+    const cx = meta.center.x;
+    const cy = meta.center.y;
+    const curbSide = meta.curbSide == null ? -1 : meta.curbSide;
+    const bw = bay.length;
+    const bh = bay.width;
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+
+    function localToWorld(lx, ly) {
+      return { x: cx + lx * c - ly * s, y: cy + lx * s + ly * c };
+    }
+
+    // Painted bay + success box (park-in only)
+    const bayMark = { x: cx, y: cy, w: bw, h: bh, angle: ang };
+    if (!lvl.markings) lvl.markings = {};
+    // Keep non-parallel decorative bays out; parallel spots use the tight bay only
+    const otherBays = (lvl.markings.bays || []).filter(function (b) {
+      return Math.hypot(b.x - cx, b.y - cy) > 0.5;
+    });
+    lvl.markings.bays = otherBays.concat([bayMark]);
+
+    if (!lvl.target.exit) {
+      lvl.target.x = cx;
+      lvl.target.y = cy;
+      lvl.target.w = bw;
+      lvl.target.h = bh;
+      lvl.target.angle = ang;
+      lvl.target.angleTol = bay.angleTol;
+      lvl.target.speedMax = bay.speedMax;
+      lvl.target.coverFrac = bay.coverFrac;
+    }
+
+    // Remove old long thin curb strips (horizontal sidewalk curbs)
+    lvl.walls = (lvl.walls || []).filter(function (w) {
+      return !(w.h < 0.6 && w.w > lvl.worldW * 0.4);
+    });
+    // Curb flush with sidewalk long edge (AABB for angle≈0 parallel lots)
+    const curbLy = curbSide * (bh / 2 + bay.curbThick / 2);
+    const curbPos = localToWorld(0, curbLy);
+    lvl.walls.push({
+      x: lvl.worldW / 2,
+      y: curbPos.y,
+      w: lvl.worldW,
+      h: bay.curbThick,
+    });
+
+    // Drop previous framing cars on the same curb row; place tight neighbours
+    lvl.obstacles = (lvl.obstacles || []).filter(function (o) {
+      if (o.kind !== "car") return true;
+      const dAng = Math.abs(wrapAngle(o.angle - ang));
+      const along = Math.abs((o.x - cx) * c + (o.y - cy) * s);
+      const lat = Math.abs(-(o.x - cx) * s + (o.y - cy) * c);
+      const sameRow = lat < 1.6 && (dAng < 0.35 || Math.abs(dAng - Math.PI) < 0.35);
+      const nearEnds = along < bw / 2 + o.length + 1.5;
+      return !(sameRow && nearEnds);
+    });
+
+    const nLen = bay.neighbourLength;
+    const nW = bay.neighbourWidth;
+    const left = localToWorld(-(bw / 2 + bay.endGap + nLen / 2), 0);
+    const right = localToWorld(bw / 2 + bay.endGap + nLen / 2, 0);
+    lvl.obstacles.push({
+      kind: "car",
+      x: left.x,
+      y: left.y,
+      angle: ang,
+      length: nLen,
+      width: nW,
+      color: "#64748b",
+    });
+    lvl.obstacles.push({
+      kind: "car",
+      x: right.x,
+      y: right.y,
+      angle: ang,
+      length: nLen,
+      width: nW,
+      color: "#475569",
+    });
+
+    return lvl;
+  }
+
+  /**
+   * Nose-in: keep authored difficulty, but never smaller than the selected car.
+   * If the bay must grow, push the immediate flanking cars apart so the physical
+   * opening still matches the green zone (+ authored flankMargin).
+   */
+  function applyNoseInLayout(lvl, vehicle) {
+    if (!lvl.noseIn || !lvl.target || lvl.target.exit) return lvl;
+    const meta = typeof lvl.noseIn === "object" ? lvl.noseIn : {};
+    const minH = vehicle.width * 1.08;
+    const minW = vehicle.length * 1.06;
+    const oldH = lvl.target.h;
+    lvl.target.h = Math.max(lvl.target.h, minH);
+    lvl.target.w = Math.max(lvl.target.w, minW);
+    lvl.target.coverFrac = lvl.target.coverFrac || 0.82;
+    lvl.target.angleTol = Math.min(lvl.target.angleTol || 0.18, 0.16);
+
+    if (lvl.markings && lvl.markings.bays) {
+      for (let i = 0; i < lvl.markings.bays.length; i++) {
+        const b = lvl.markings.bays[i];
+        if (Math.hypot(b.x - lvl.target.x, b.y - lvl.target.y) < 0.2) {
+          b.h = Math.max(b.h, lvl.target.h);
+          b.w = Math.max(b.w, lvl.target.w);
+        }
+      }
+    }
+
+    const grown = lvl.target.h - oldH;
+    if (grown > 0.01) {
+      const ang = lvl.target.angle || 0;
+      // Lateral axis in world (vehicle-width direction for a nose-in bay)
+      const latX = -Math.sin(ang);
+      const latY = Math.cos(ang);
+      const cx = lvl.target.x;
+      const cy = lvl.target.y;
+      const flankMargin = meta.flankMargin != null ? meta.flankMargin : 0.22;
+      const halfOpen = (lvl.target.h + flankMargin) / 2;
+      (lvl.obstacles || []).forEach(function (o) {
+        if (o.kind !== "car") return;
+        const dx = o.x - cx;
+        const dy = o.y - cy;
+        const along = dx * Math.cos(ang) + dy * Math.sin(ang);
+        const lat = dx * latX + dy * latY;
+        const sameRow = Math.abs(along) < 1.2;
+        if (!sameRow) return;
+        // Re-seat cars that were immediate flanks (closest on each side)
+        if (Math.abs(Math.abs(lat) - (oldH + flankMargin) / 2 - o.width / 2) < 0.55) {
+          const sign = lat >= 0 ? 1 : -1;
+          const newLat = sign * (halfOpen + o.width / 2);
+          o.x = cx + along * Math.cos(ang) + newLat * latX;
+          o.y = cy + along * Math.sin(ang) + newLat * latY;
+        }
+      });
+    }
+    return lvl;
+  }
+
+  function prepareLevel(index, vehicle) {
+    const lvl = cloneLevel(window.PARK_LEVELS[index]);
+    applyParallelLayout(lvl, vehicle);
+    applyNoseInLayout(lvl, vehicle);
+    return lvl;
   }
 
   function clamp(v, a, b) {
@@ -279,7 +461,8 @@
     if (!t) return false;
     if (Math.abs(car.speed) > t.speedMax) return false;
 
-    const coverOk = carCornersInTarget(car, t, t.exit ? 0.55 : 0.72);
+    const need = t.coverFrac != null ? t.coverFrac : t.exit ? 0.55 : 0.72;
+    const coverOk = carCornersInTarget(car, t, need);
     if (!coverOk) return false;
 
     if (t.angle != null && t.angleTol < Math.PI) {
@@ -423,6 +606,75 @@
     c.fillRect(x - r * 0.35, y - r * 0.2, r * 0.7, r * 0.35);
   }
 
+  function worldToScreen(wx, wy, car, fit) {
+    const dx = (wx - car.x) * fit;
+    const dy = (wy - car.y) * fit;
+    const th = -car.angle + CAMERA_UP_OFFSET;
+    const cos = Math.cos(th);
+    const sin = Math.sin(th);
+    return {
+      x: CANVAS_W / 2 + dx * cos - dy * sin,
+      y: CANVAS_H / 2 + dx * sin + dy * cos,
+    };
+  }
+
+  function drawOffscreenTargetArrow(c, car, fit, lvl) {
+    const t = lvl.target;
+    if (!t) return;
+    const scr = worldToScreen(t.x, t.y, car, fit);
+    const margin = 28;
+    const onScreen =
+      scr.x >= margin &&
+      scr.x <= CANVAS_W - margin &&
+      scr.y >= margin &&
+      scr.y <= CANVAS_H - margin;
+    if (onScreen) return;
+
+    const cx = CANVAS_W / 2;
+    const cy = CANVAS_H / 2;
+    let dx = scr.x - cx;
+    let dy = scr.y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+
+    // Intersect with inset rectangle
+    const inset = 36;
+    const maxX = CANVAS_W / 2 - inset;
+    const maxY = CANVAS_H / 2 - inset;
+    const sx = dx === 0 ? Infinity : maxX / Math.abs(dx);
+    const sy = dy === 0 ? Infinity : maxY / Math.abs(dy);
+    const tScale = Math.min(sx, sy);
+    const ax = cx + dx * tScale;
+    const ay = cy + dy * tScale;
+    const ang = Math.atan2(dy, dx);
+
+    c.save();
+    c.translate(ax, ay);
+    c.rotate(ang);
+    // Arrow body
+    c.fillStyle = "rgba(74, 222, 128, 0.95)";
+    c.strokeStyle = "rgba(15, 23, 42, 0.85)";
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(18, 0);
+    c.lineTo(-10, 12);
+    c.lineTo(-4, 0);
+    c.lineTo(-10, -12);
+    c.closePath();
+    c.fill();
+    c.stroke();
+    // Label screen-upright
+    c.rotate(-ang);
+    c.fillStyle = "#4ade80";
+    c.font = "bold 11px Segoe UI, sans-serif";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    const label = t.exit ? "EXIT" : "TARGET";
+    c.fillText(label, 0, dy > 0.2 ? -22 : 22);
+    c.restore();
+  }
+
   function drawPlayerCarScreenFixed(c, car, fit) {
     // Car drawn at canvas center, nose toward top (local +X after -90°).
     c.save();
@@ -530,6 +782,11 @@
     // ——— Player car: screen-centered, always nose-up (not double-rotated) ———
     drawPlayerCarScreenFixed(ctx, car, fit);
 
+    // Off-screen target / exit direction indicator
+    if (state.running && !state.won && !state.failed) {
+      drawOffscreenTargetArrow(ctx, car, fit, lvl);
+    }
+
     // ——— Screen-fixed overlays (HUD tips on canvas; DOM HUD stays fixed too) ———
     if (state.running && state.levelIndex === 0 && state.time < 10) {
       ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
@@ -606,8 +863,9 @@
 
   // ——— Lifecycle ———
   function startLevel() {
-    const lvl = level();
     const v = vehicleById(state.vehicleId);
+    state.activeLevel = prepareLevel(state.levelIndex, v);
+    const lvl = state.activeLevel;
     state.car = createCar(v, lvl.spawn);
     state.bumps = 0;
     state.bumpCooldown = 0;

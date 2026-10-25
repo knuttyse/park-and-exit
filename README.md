@@ -38,7 +38,9 @@ Generic names only (no trademarks):
 
 ## Levels
 
-24 levels with rising difficulty: parallel in/out, perpendicular bay park & exit, angle parking, narrow lanes, dead ends, cone funnels, and wagon/lorry challenges. Pick any level from the menu; Next advances in order after a success.
+30 levels with rising difficulty: parallel in/out (vehicle-scaled minimal bay + curb flush), perpendicular / angle park & exit, nose-in aisle exercises (90° approach), narrow lanes, and wagon/lorry challenges.
+
+Parallel park targets are sized from the selected car (~10% length and ~6% width clearance). An on-screen arrow points to the TARGET/EXIT when it is off-camera.
 
 
 ## GitHub Pages
