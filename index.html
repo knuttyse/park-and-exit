@@ -29,6 +29,14 @@
           <div id="level-picker" class="level-list" role="listbox" aria-label="Level"></div>
         </div>
 
+        <div class="menu-section menu-section-row">
+          <h2>Hint mode</h2>
+          <button id="btn-hints-menu" class="btn btn-secondary hint-toggle" type="button" aria-pressed="false">
+            Hints: Off
+          </button>
+          <p class="hint-toggle-note">Step boxes show where to place the car for each stage of the manoeuvre. Default is off.</p>
+        </div>
+
         <button id="btn-start" class="btn btn-primary btn-lg" type="button">Start driving</button>
         <p class="hint-keys">
           <strong>Steering wheel:</strong> <kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> = steer only
@@ -47,12 +55,15 @@
         <div class="hud-left">
           <button id="btn-menu" class="btn btn-ghost" type="button" title="Back to menu">Menu</button>
           <button id="btn-restart" class="btn btn-ghost" type="button" title="Restart (R)">Restart</button>
+          <button id="btn-hints-hud" class="btn btn-ghost" type="button" title="Toggle hint mode" aria-pressed="false">Hints: Off</button>
         </div>
         <div class="hud-center">
           <h2 id="hud-level">Level</h2>
           <p id="hud-tip" class="hud-tip"></p>
+          <p id="hud-hint-step" class="hud-hint-step hidden"></p>
         </div>
         <div class="hud-right">
+          <button id="btn-hint-next" class="btn btn-ghost hidden" type="button" title="Next hint step">Next step</button>
           <div class="stat"><span class="stat-label">Time</span><span id="hud-time">0.0s</span></div>
           <div class="stat"><span class="stat-label">Bumps</span><span id="hud-bumps">0</span></div>
           <div class="stat"><span class="stat-label">Car</span><span id="hud-car">—</span></div>
@@ -105,6 +116,7 @@
 
   <script src="js/vehicles.js"></script>
   <script src="js/levels.js"></script>
+  <script src="js/hints.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>

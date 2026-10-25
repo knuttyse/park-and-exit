@@ -417,3 +417,33 @@ kbd {
 @media (pointer: coarse) {
   .touch-controls.show { display: flex; }
 }
+
+/* Hint mode */
+.menu-section-row .hint-toggle {
+  margin-top: 4px;
+}
+.hint-toggle[aria-pressed="true"] {
+  background: #163024;
+  color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.35);
+}
+.hint-toggle-note {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.hud-hint-step {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #86efac;
+}
+.hud-hint-step.hidden,
+#btn-hint-next.hidden {
+  display: none;
+}
+#btn-hints-hud[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: rgba(74, 222, 128, 0.45);
+}

@@ -26,6 +26,11 @@
     lastTs: 0,
     tutorialFlash: 0,
     activeLevel: null,
+    hintsOn: false,
+    hintType: null,
+    hintSteps: [],
+    hintStepIndex: 0,
+    hintHold: 0,
   };
 
   const canvas = document.getElementById("game");
@@ -242,6 +247,149 @@
     applyNoseInLayout(lvl, vehicle);
     return lvl;
   }
+
+  // ——— Hint mode ———
+  function syncHintToggleUi() {
+    const label = state.hintsOn ? "Hints: On" : "Hints: Off";
+    const pressed = state.hintsOn ? "true" : "false";
+    ["btn-hints-menu", "btn-hints-hud"].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = label;
+      el.setAttribute("aria-pressed", pressed);
+    });
+    const stepEl = document.getElementById("hud-hint-step");
+    const nextBtn = document.getElementById("btn-hint-next");
+    if (stepEl) stepEl.classList.toggle("hidden", !state.hintsOn);
+    if (nextBtn) nextBtn.classList.toggle("hidden", !state.hintsOn);
+  }
+
+  function setHintsOn(on) {
+    state.hintsOn = !!on;
+    if (state.hintsOn && state.activeLevel && state.car) {
+      rebuildHintSteps();
+    }
+    syncHintToggleUi();
+    updateHintHud();
+  }
+
+  function rebuildHintSteps() {
+    const api = window.ParkHints;
+    if (!api || !state.activeLevel) {
+      state.hintSteps = [];
+      state.hintType = null;
+      state.hintStepIndex = 0;
+      return;
+    }
+    const v = vehicleById(state.vehicleId);
+    const built = api.buildHintSteps(state.activeLevel, v);
+    state.hintType = built.type;
+    state.hintSteps = built.steps || [];
+    state.hintStepIndex = 0;
+    state.hintHold = 0;
+  }
+
+  function updateHintHud() {
+    const stepEl = document.getElementById("hud-hint-step");
+    if (!stepEl) return;
+    if (!state.hintsOn || !state.hintSteps.length) {
+      stepEl.textContent = "";
+      return;
+    }
+    const i = state.hintStepIndex;
+    const step = state.hintSteps[i];
+    const label = step ? step.label : "—";
+    stepEl.textContent =
+      "Hint " + (i + 1) + "/" + state.hintSteps.length + " · " + label.replace(/^\d+\s*·\s*/, "");
+  }
+
+  function advanceHintStep(manual) {
+    if (!state.hintsOn || !state.hintSteps.length) return;
+    if (state.hintStepIndex < state.hintSteps.length - 1) {
+      state.hintStepIndex += 1;
+      state.hintHold = 0;
+      updateHintHud();
+    } else if (manual) {
+      // Stay on last step
+      state.hintHold = 0;
+    }
+  }
+
+  function updateHintProgress(dt) {
+    if (!state.hintsOn || !state.running || !state.car || !state.hintSteps.length) return;
+    const api = window.ParkHints;
+    if (!api) return;
+    const step = state.hintSteps[state.hintStepIndex];
+    if (!step) return;
+    const isLast = state.hintStepIndex >= state.hintSteps.length - 1;
+    if (api.carMatchesHintStep(state.car, step, { allowFlip: isLast })) {
+      state.hintHold += dt;
+      if (!isLast && state.hintHold > 0.4) {
+        advanceHintStep(false);
+      }
+    } else {
+      state.hintHold = Math.max(0, state.hintHold - dt * 0.5);
+    }
+  }
+
+  function drawHintSteps(c, fit) {
+    if (!state.hintsOn || !state.hintSteps.length) return;
+    const steps = state.hintSteps;
+    const active = state.hintStepIndex;
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      const isActive = i === active;
+      const done = i < active;
+      if (!isActive && !done) {
+        // Future steps: very faint outline only
+        c.save();
+        c.translate(s.x * fit, s.y * fit);
+        c.rotate(s.angle || 0);
+        const w = s.w * fit;
+        const h = s.h * fit;
+        c.strokeStyle = "rgba(147, 197, 253, 0.22)";
+        c.lineWidth = 1.2;
+        c.setLineDash([5, 5]);
+        c.strokeRect(-w / 2, -h / 2, w, h);
+        c.setLineDash([]);
+        c.restore();
+        continue;
+      }
+      c.save();
+      c.translate(s.x * fit, s.y * fit);
+      c.rotate(s.angle || 0);
+      const w = s.w * fit;
+      const h = s.h * fit;
+      if (done) {
+        c.strokeStyle = "rgba(148, 163, 184, 0.4)";
+        c.fillStyle = "rgba(148, 163, 184, 0.08)";
+        c.lineWidth = 1.5;
+      } else {
+        c.strokeStyle = "rgba(56, 189, 248, 0.95)";
+        c.fillStyle = "rgba(56, 189, 248, 0.16)";
+        c.lineWidth = 2.5;
+      }
+      c.setLineDash(isActive ? [10, 6] : []);
+      c.fillRect(-w / 2, -h / 2, w, h);
+      c.strokeRect(-w / 2, -h / 2, w, h);
+      c.setLineDash([]);
+      // Nose tick
+      c.strokeStyle = isActive ? "rgba(125, 211, 252, 0.95)" : "rgba(148, 163, 184, 0.5)";
+      c.beginPath();
+      c.moveTo(w / 2 - 2, 0);
+      c.lineTo(w / 2 + fit * 0.35, 0);
+      c.stroke();
+      // Label upright in world (counter-rotate)
+      c.rotate(-(s.angle || 0));
+      c.fillStyle = isActive ? "#7dd3fc" : "rgba(203, 213, 225, 0.7)";
+      c.font = `bold ${Math.max(10, fit * 0.38)}px Segoe UI, sans-serif`;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText(s.label || "", 0, 0);
+      c.restore();
+    }
+  }
+
 
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
@@ -777,6 +925,9 @@
       }
     }
 
+    // Hint ghost boxes (world space, under chase camera)
+    drawHintSteps(ctx, fit);
+
     ctx.restore();
 
     // ——— Player car: screen-centered, always nose-up (not double-rotated) ———
@@ -820,6 +971,7 @@
     document.getElementById("hud-time").textContent = state.time.toFixed(1) + "s";
     document.getElementById("hud-bumps").textContent = String(state.bumps);
     document.getElementById("hud-car").textContent = v.name;
+    updateHintHud();
   }
 
   function showScreen(name) {
@@ -875,9 +1027,11 @@
     state.failed = false;
     state.successHold = 0;
     state.lastTs = 0;
+    rebuildHintSteps();
     hideOverlays();
     showScreen("game");
     resizeCanvas();
+    syncHintToggleUi();
     updateHud();
     // Show touch controls on coarse pointers
     const tc = document.getElementById("touch-controls");
@@ -919,6 +1073,7 @@
         state.successHold = 0;
       }
 
+      updateHintProgress(dt);
       updateHud();
     }
 
@@ -1078,6 +1233,21 @@
       startLevel();
     }
   });
+
+  function toggleHints() {
+    setHintsOn(!state.hintsOn);
+  }
+  const btnHintsMenu = document.getElementById("btn-hints-menu");
+  const btnHintsHud = document.getElementById("btn-hints-hud");
+  const btnHintNext = document.getElementById("btn-hint-next");
+  if (btnHintsMenu) btnHintsMenu.addEventListener("click", toggleHints);
+  if (btnHintsHud) btnHintsHud.addEventListener("click", toggleHints);
+  if (btnHintNext) {
+    btnHintNext.addEventListener("click", function () {
+      advanceHintStep(true);
+    });
+  }
+  syncHintToggleUi();
 
   // Boot
   buildVehiclePicker();

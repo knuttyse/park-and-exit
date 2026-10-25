@@ -58,6 +58,7 @@ index.html
 css/style.css
 js/vehicles.js
 js/levels.js
+js/hints.js
 js/game.js
 README.md
 .nojekyll
