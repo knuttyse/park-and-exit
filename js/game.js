@@ -4,9 +4,9 @@
 (function () {
   "use strict";
 
-  const SCALE = 24; // pixels per world unit at native canvas size
-  const CANVAS_W = 960;
-  const CANVAS_H = 640;
+  // Logical canvas size in CSS pixels (updated on resize to fill play area)
+  let CANVAS_W = 960;
+  let CANVAS_H = 640;
 
   // ——— State ———
   const state = {
@@ -29,6 +29,28 @@
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
+  const canvasWrap = document.querySelector(".canvas-wrap");
+
+  /** Size the drawing buffer to the play area (full width/height of .canvas-wrap). */
+  function resizeCanvas() {
+    if (!canvasWrap) return;
+    const rect = canvasWrap.getBoundingClientRect();
+    const cssW = Math.max(1, Math.floor(rect.width));
+    const cssH = Math.max(1, Math.floor(rect.height));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    CANVAS_W = cssW;
+    CANVAS_H = cssH;
+
+    const bufW = Math.max(1, Math.floor(cssW * dpr));
+    const bufH = Math.max(1, Math.floor(cssH * dpr));
+    if (canvas.width !== bufW || canvas.height !== bufH) {
+      canvas.width = bufW;
+      canvas.height = bufH;
+    }
+    // Draw in CSS-pixel coordinates; buffer is DPR-scaled
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
 
   // ——— Helpers ———
   function vehicleById(id) {
@@ -547,6 +569,10 @@
     document.getElementById("screen-menu").classList.toggle("active", name === "menu");
     document.getElementById("screen-game").classList.toggle("active", name === "game");
     state.screen = name;
+    if (name === "game") {
+      // Layout is visible now — measure play area and fill it
+      requestAnimationFrame(resizeCanvas);
+    }
   }
 
   function hideOverlays() {
@@ -593,6 +619,7 @@
     state.lastTs = 0;
     hideOverlays();
     showScreen("game");
+    resizeCanvas();
     updateHud();
     // Show touch controls on coarse pointers
     const tc = document.getElementById("touch-controls");
@@ -798,5 +825,11 @@
   buildVehiclePicker();
   buildLevelPicker();
   bindTouch();
+  resizeCanvas();
+  window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("orientationchange", () => setTimeout(resizeCanvas, 100));
+  if (typeof ResizeObserver !== "undefined" && canvasWrap) {
+    new ResizeObserver(() => resizeCanvas()).observe(canvasWrap);
+  }
   requestAnimationFrame(tick);
 })();
