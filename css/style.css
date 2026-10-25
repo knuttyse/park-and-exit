@@ -439,7 +439,19 @@ kbd {
   font-weight: 600;
   color: #86efac;
 }
+.hud-hint-coach {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.25;
+  max-width: 36rem;
+  color: #fde68a;
+}
+.hud-hint-coach.coach-ok { color: #86efac; }
+.hud-hint-coach.coach-do { color: #fde68a; }
+.hud-hint-coach.coach-fix { color: #fdba74; }
 .hud-hint-step.hidden,
+.hud-hint-coach.hidden,
 #btn-hint-next.hidden {
   display: none;
 }

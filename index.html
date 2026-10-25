@@ -34,7 +34,7 @@
           <button id="btn-hints-menu" class="btn btn-secondary hint-toggle" type="button" aria-pressed="false">
             Hints: Off
           </button>
-          <p class="hint-toggle-note">Step boxes show where to place the car for each stage of the manoeuvre. Default is off.</p>
+          <p class="hint-toggle-note">Step boxes guide each stage of the manoeuvre. Level 1 adds live coaching (steer / reverse / stop). Default is off.</p>
         </div>
 
         <button id="btn-start" class="btn btn-primary btn-lg" type="button">Start driving</button>
@@ -61,6 +61,7 @@
           <h2 id="hud-level">Level</h2>
           <p id="hud-tip" class="hud-tip"></p>
           <p id="hud-hint-step" class="hud-hint-step hidden"></p>
+          <p id="hud-hint-coach" class="hud-hint-coach hidden" aria-live="polite"></p>
         </div>
         <div class="hud-right">
           <button id="btn-hint-next" class="btn btn-ghost hidden" type="button" title="Next hint step">Next step</button>

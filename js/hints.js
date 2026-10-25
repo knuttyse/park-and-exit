@@ -154,7 +154,12 @@
     return { left: left && left.o, right: right && right.o, row: row };
   }
 
+  function isGuidedParallel(lvl) {
+    return !!(lvl && lvl.id === "parallel-in");
+  }
+
   function buildParallelSteps(lvl, vehicle) {
+    const guided = isGuidedParallel(lvl);
     const meta = lvl.parallel || {};
     const ang = meta.angle != null ? meta.angle : lvl.target.angle || 0;
     const cx = lvl.target.x;
@@ -174,23 +179,25 @@
       : travelAlong * (bw / 2 + 0.12 + vehicle.length * 0.5);
 
     // Pull-up stays fully on the street — lateral gap from bay, never over curb
-    const latGap = 0.45 + vehicle.width * 0.1;
+    const latGap = guided ? 0.55 + vehicle.width * 0.12 : 0.45 + vehicle.width * 0.1;
     const pullLy = street * (bh / 2 + latGap + vehicle.width / 2);
-    const pull = localToWorld(cx, cy, ang, leadAlong, pullLy);
+    // Guided: stop a bit past the lead car so reverse-in has a clear swing
+    const pullAlong = guided
+      ? leadAlong + travelAlong * vehicle.length * 0.08
+      : leadAlong;
+    const pull = localToWorld(cx, cy, ang, pullAlong, pullLy);
     const pullAng = travelAlong > 0 ? ang : ang + Math.PI;
 
-    // Shallower angles so the footprint can stay street-side of a flush curb
     const turnSign = -curbSide * (travelAlong > 0 ? 1 : -1);
-    const angleIn = pullAng + turnSign * 0.55; // ~31°
-    const angleMid = pullAng + turnSign * 0.28;
+    const angleIn = pullAng + turnSign * (guided ? 0.62 : 0.55);
+    const angleMid = pullAng + turnSign * (guided ? 0.32 : 0.28);
 
-    // Keep reverse/straighten centers toward street of bay center
     const a2 = localToWorld(
       cx,
       cy,
       ang,
-      travelAlong * (bw * 0.12),
-      street * (vehicle.width * 0.22)
+      travelAlong * (bw * (guided ? 0.08 : 0.12)),
+      street * (vehicle.width * (guided ? 0.28 : 0.22))
     );
     const a3 = localToWorld(
       cx,
@@ -200,16 +207,218 @@
       street * (vehicle.width * 0.08)
     );
 
+    const curbSteer = turnSign > 0 ? "right" : "left";
+    const unwindSteer = turnSign > 0 ? "left" : "right";
+
     const steps = [
       carBox(pull.x, pull.y, pullAng, vehicle, "1 · Pull up"),
       carBox(a2.x, a2.y, angleIn, vehicle, "2 · Reverse in"),
       carBox(a3.x, a3.y, angleMid, vehicle, "3 · Straighten"),
       carBox(cx, cy, ang, vehicle, "4 · Finish"),
     ];
+    steps[0].drive = "forward";
+    steps[0].steerPref = "center";
+    steps[0].coach = "Drive forward and stop next to the gap (blue box).";
+    steps[1].drive = "reverse";
+    steps[1].steerPref = curbSteer;
+    steps[1].coach =
+      "Reverse slowly · steer " + curbSteer.toUpperCase() + " into the bay.";
+    steps[2].drive = "reverse";
+    steps[2].steerPref = unwindSteer;
+    steps[2].coach =
+      "Keep reversing · straighten (steer " + unwindSteer.toUpperCase() + ").";
+    steps[3].drive = "creep";
+    steps[3].steerPref = "center";
+    steps[3].coach = "Creep into the bay · stop when aligned with the curb.";
+    steps[0].turnSign = turnSign;
+    steps[1].turnSign = turnSign;
+    steps[2].turnSign = turnSign;
+    steps[3].turnSign = turnSign;
     for (let i = 0; i < steps.length; i++) {
       clampBoxToCurb(steps[i], curbLine, 0.05);
+      steps[i].guided = guided;
     }
     return steps;
+  }
+
+  /** Match tolerances — forgiving early, tighter late (guided level 1). */
+  function stepMatchOpts(step, index, total) {
+    const guided = step && step.guided;
+    if (!guided) {
+      return {
+        posTol: null,
+        angTol: null,
+        hold: 0.4,
+        allowFlip: index >= total - 1,
+      };
+    }
+    if (index === 0) {
+      return { posTol: 2.1, angTol: 0.75, hold: 0.22, allowFlip: false };
+    }
+    if (index === 1) {
+      return { posTol: 1.7, angTol: 0.6, hold: 0.28, allowFlip: false };
+    }
+    if (index === 2) {
+      return { posTol: 1.35, angTol: 0.42, hold: 0.32, allowFlip: false };
+    }
+    return { posTol: 1.15, angTol: 0.38, hold: 0.5, allowFlip: true };
+  }
+
+  /**
+   * Live coaching for guided parallel (level 1).
+   * Returns { text, status: 'ok'|'do'|'fix', steer, drive } or null.
+   */
+  function liveCoach(car, lvl, steps, index) {
+    if (!isGuidedParallel(lvl) || !car || !steps || !steps.length) return null;
+    const step = steps[Math.min(index, steps.length - 1)];
+    if (!step) return null;
+    const dx = step.x - car.x;
+    const dy = step.y - car.y;
+    const dist = Math.hypot(dx, dy);
+    const along =
+      dx * Math.cos(car.angle) + dy * Math.sin(car.angle);
+    const angErr = wrapAngle(step.angle - car.angle);
+    const absErr = Math.abs(angErr);
+    const reversing = car.speed < -0.08;
+    const goingFwd = car.speed > 0.08;
+    const stopped = Math.abs(car.speed) < 0.08;
+
+    // Steer advice: forward → positive angErr needs RIGHT; reverse flips
+    function steerForAng(err, inReverse) {
+      if (Math.abs(err) < 0.12) return "center";
+      const wantCcw = err > 0;
+      if (inReverse) return wantCcw ? "left" : "right";
+      return wantCcw ? "right" : "left";
+    }
+
+    const pref = step.steerPref || "center";
+    const wantRev =
+      step.drive === "reverse" || (step.drive === "creep" && along < -0.15);
+    const wantFwd = step.drive === "forward" || (step.drive === "creep" && along > 0.25);
+    const inReverseIntent = wantRev || reversing;
+    let steer = steerForAng(angErr, inReverseIntent);
+    if (absErr < 0.14 && pref !== "center") {
+      // Prefer scripted curb/unwind when nearly on heading
+      steer = pref;
+    } else if (absErr < 0.14) {
+      steer = "center";
+    }
+
+    const matched = carMatchesHintStep(car, step, stepMatchOpts(step, index, steps.length));
+
+    let text;
+    let status = "do";
+    let drive = wantRev ? "reverse" : wantFwd ? "forward" : "stop";
+
+    if (index === 0) {
+      if (matched && (stopped || Math.abs(car.speed) < 0.45)) {
+        text = "On track — stop here, then reverse into the bay.";
+        status = "ok";
+        drive = "stop";
+        steer = "center";
+      } else if (dist > 3.2) {
+        text =
+          "Drive forward toward the blue pull-up box" +
+          (steer === "left"
+            ? " · nudge LEFT"
+            : steer === "right"
+              ? " · nudge RIGHT"
+              : "") +
+          ".";
+        drive = "forward";
+      } else if (!stopped && goingFwd && dist < 1.8) {
+        text = "Close enough — brake and stop alongside the gap.";
+        drive = "stop";
+        status = "ok";
+      } else if (along < -1.2) {
+        text = "You passed it — reverse a little, then stop at the box.";
+        drive = "reverse";
+        status = "fix";
+      } else {
+        text = "Line up with the blue box and stop.";
+        drive = Math.abs(along) < 0.4 ? "stop" : along > 0 ? "forward" : "reverse";
+      }
+    } else if (index === 1) {
+      if (matched) {
+        text = "Good angle — keep reversing slowly into the bay.";
+        status = "ok";
+        drive = "reverse";
+      } else if (goingFwd) {
+        text = "Stop and reverse · steer " + (pref || steer).toUpperCase() + " toward the curb.";
+        drive = "reverse";
+        status = "fix";
+        steer = pref || steer;
+      } else {
+        const s = pref || steer;
+        text =
+          (reversing ? "Keep reversing" : "Reverse now") +
+          " · steer " +
+          s.toUpperCase() +
+          " into the blue box.";
+        drive = "reverse";
+        steer = s;
+        if (dist < 1.6 && absErr < 0.55) status = "ok";
+      }
+    } else if (index === 2) {
+      if (matched) {
+        text = "On track — almost straight. Ease back to the finish box.";
+        status = "ok";
+        drive = "reverse";
+        steer = "center";
+      } else if (goingFwd && dist > 1.2) {
+        text = "Too far forward — reverse and straighten the wheel.";
+        drive = "reverse";
+        status = "fix";
+        steer = pref || steer;
+      } else {
+        const s = absErr > 0.18 ? steer : pref || "center";
+        text =
+          (reversing || wantRev ? "Keep reversing" : "Reverse") +
+          (s === "center"
+            ? " · wheels straight."
+            : " · steer " + s.toUpperCase() + " to straighten.");
+        drive = "reverse";
+        steer = s;
+        if (absErr < 0.25 && dist < 1.8) status = "ok";
+      }
+    } else {
+      // Finish
+      if (matched && stopped) {
+        text = "On track — hold still to finish.";
+        status = "ok";
+        drive = "stop";
+        steer = "center";
+      } else if (dist < 0.85 && absErr < 0.35) {
+        text = "Close enough — stop when the car is in the bay.";
+        status = "ok";
+        drive = "stop";
+      } else if (along > 0.35) {
+        text = "Creep FORWARD a little · center in the bay.";
+        drive = "forward";
+      } else if (along < -0.35) {
+        text = "Creep REVERSE a little · center in the bay.";
+        drive = "reverse";
+      } else if (absErr > 0.22) {
+        text =
+          "Straighten · steer " +
+          steer.toUpperCase() +
+          " while creeping.";
+        drive = "creep";
+      } else {
+        text = "Center on the finish box and stop.";
+        drive = "stop";
+        status = "ok";
+      }
+    }
+
+    return {
+      text: text,
+      status: status,
+      steer: steer,
+      drive: drive,
+      dist: dist,
+      matched: matched,
+    };
   }
 
   function buildBayReverseSteps(lvl, vehicle) {
@@ -376,7 +585,8 @@
         steps = buildExitSteps(lvl, vehicle);
         break;
     }
-    return { type: type, steps: steps };
+    const guided = type === "parallel" && isGuidedParallel(lvl);
+    return { type: type, steps: steps, guided: guided };
   }
 
   /** True if car roughly matches a step box (center + heading). */
@@ -401,5 +611,8 @@
     carMatchesHintStep: carMatchesHintStep,
     clampBoxToCurb: clampBoxToCurb,
     getCurbLine: getCurbLine,
+    isGuidedParallel: isGuidedParallel,
+    stepMatchOpts: stepMatchOpts,
+    liveCoach: liveCoach,
   };
 })();

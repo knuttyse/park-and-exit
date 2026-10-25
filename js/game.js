@@ -31,6 +31,8 @@
     hintSteps: [],
     hintStepIndex: 0,
     hintHold: 0,
+    hintGuided: false,
+    hintCoach: null,
   };
 
   const canvas = document.getElementById("game");
@@ -274,8 +276,10 @@
       el.setAttribute("aria-pressed", pressed);
     });
     const stepEl = document.getElementById("hud-hint-step");
+    const coachEl = document.getElementById("hud-hint-coach");
     const nextBtn = document.getElementById("btn-hint-next");
     if (stepEl) stepEl.classList.toggle("hidden", !state.hintsOn);
+    if (coachEl) coachEl.classList.toggle("hidden", !state.hintsOn);
     if (nextBtn) nextBtn.classList.toggle("hidden", !state.hintsOn);
   }
 
@@ -294,28 +298,57 @@
       state.hintSteps = [];
       state.hintType = null;
       state.hintStepIndex = 0;
+      state.hintGuided = false;
+      state.hintCoach = null;
       return;
     }
     const v = vehicleById(state.vehicleId);
     const built = api.buildHintSteps(state.activeLevel, v);
     state.hintType = built.type;
     state.hintSteps = built.steps || [];
+    state.hintGuided = !!built.guided;
     state.hintStepIndex = 0;
     state.hintHold = 0;
+    state.hintCoach = null;
   }
 
   function updateHintHud() {
     const stepEl = document.getElementById("hud-hint-step");
+    const coachEl = document.getElementById("hud-hint-coach");
     if (!stepEl) return;
     if (!state.hintsOn || !state.hintSteps.length) {
       stepEl.textContent = "";
+      if (coachEl) {
+        coachEl.textContent = "";
+        coachEl.className = "hud-hint-coach hidden";
+      }
       return;
     }
     const i = state.hintStepIndex;
     const step = state.hintSteps[i];
     const label = step ? step.label : "—";
+    const prefix = state.hintGuided ? "Guide " : "Hint ";
     stepEl.textContent =
-      "Hint " + (i + 1) + "/" + state.hintSteps.length + " · " + label.replace(/^\d+\s*·\s*/, "");
+      prefix + (i + 1) + "/" + state.hintSteps.length + " · " + label.replace(/^\d+\s*·\s*/, "");
+    if (coachEl) {
+      const coach = state.hintCoach;
+      if (coach && coach.text) {
+        coachEl.textContent = coach.text;
+        coachEl.className =
+          "hud-hint-coach" +
+          (coach.status === "ok"
+            ? " coach-ok"
+            : coach.status === "fix"
+              ? " coach-fix"
+              : " coach-do");
+      } else if (step && step.coach) {
+        coachEl.textContent = step.coach;
+        coachEl.className = "hud-hint-coach coach-do";
+      } else {
+        coachEl.textContent = "";
+        coachEl.className = "hud-hint-coach";
+      }
+    }
   }
 
   function advanceHintStep(manual) {
@@ -325,7 +358,6 @@
       state.hintHold = 0;
       updateHintHud();
     } else if (manual) {
-      // Stay on last step
       state.hintHold = 0;
     }
   }
@@ -334,35 +366,158 @@
     if (!state.hintsOn || !state.running || !state.car || !state.hintSteps.length) return;
     const api = window.ParkHints;
     if (!api) return;
-    const step = state.hintSteps[state.hintStepIndex];
+    const steps = state.hintSteps;
+    const idx = state.hintStepIndex;
+    const step = steps[idx];
     if (!step) return;
-    const isLast = state.hintStepIndex >= state.hintSteps.length - 1;
-    if (api.carMatchesHintStep(state.car, step, { allowFlip: isLast })) {
+    const isLast = idx >= steps.length - 1;
+    const opts = api.stepMatchOpts
+      ? api.stepMatchOpts(step, idx, steps.length)
+      : { hold: 0.4, allowFlip: isLast };
+    const matchOpts = {
+      posTol: opts.posTol != null ? opts.posTol : undefined,
+      angTol: opts.angTol != null ? opts.angTol : undefined,
+      allowFlip: opts.allowFlip,
+    };
+    // Guided: skip ahead if already at a later step (no hunting backward)
+    if (state.hintGuided && !isLast) {
+      for (let j = steps.length - 1; j > idx; j--) {
+        const later = steps[j];
+        const lo = api.stepMatchOpts
+          ? api.stepMatchOpts(later, j, steps.length)
+          : {};
+        if (
+          api.carMatchesHintStep(state.car, later, {
+            posTol: lo.posTol,
+            angTol: lo.angTol,
+            allowFlip: lo.allowFlip,
+          })
+        ) {
+          state.hintStepIndex = j;
+          state.hintHold = 0;
+          break;
+        }
+      }
+    }
+    const cur = steps[state.hintStepIndex];
+    const curOpts = api.stepMatchOpts
+      ? api.stepMatchOpts(cur, state.hintStepIndex, steps.length)
+      : opts;
+    const holdNeed = curOpts.hold != null ? curOpts.hold : 0.4;
+    if (
+      api.carMatchesHintStep(state.car, cur, {
+        posTol: curOpts.posTol,
+        angTol: curOpts.angTol,
+        allowFlip: curOpts.allowFlip,
+      })
+    ) {
       state.hintHold += dt;
-      if (!isLast && state.hintHold > 0.4) {
+      if (state.hintStepIndex < steps.length - 1 && state.hintHold > holdNeed) {
         advanceHintStep(false);
       }
     } else {
       state.hintHold = Math.max(0, state.hintHold - dt * 0.5);
     }
+
+    if (api.liveCoach) {
+      state.hintCoach = api.liveCoach(
+        state.car,
+        state.activeLevel,
+        steps,
+        state.hintStepIndex
+      );
+    } else {
+      state.hintCoach = null;
+    }
+  }
+
+  function drawHintGuidePath(c, fit, car, steps, active) {
+    if (!car || !steps.length) return;
+    const s = steps[active];
+    if (!s) return;
+    // Path: car → active → next
+    c.save();
+    c.strokeStyle = "rgba(56, 189, 248, 0.55)";
+    c.lineWidth = 2.2;
+    c.setLineDash([8, 6]);
+    c.beginPath();
+    c.moveTo(car.x * fit, car.y * fit);
+    c.lineTo(s.x * fit, s.y * fit);
+    if (active + 1 < steps.length) {
+      const n = steps[active + 1];
+      c.lineTo(n.x * fit, n.y * fit);
+    }
+    c.stroke();
+    c.setLineDash([]);
+    // Arrow head at active step
+    const ang = Math.atan2(s.y - car.y, s.x - car.x);
+    const ax = s.x * fit;
+    const ay = s.y * fit;
+    c.fillStyle = "rgba(56, 189, 248, 0.9)";
+    c.beginPath();
+    c.moveTo(ax, ay);
+    c.lineTo(ax - Math.cos(ang) * 14 + Math.sin(ang) * 7, ay - Math.sin(ang) * 14 - Math.cos(ang) * 7);
+    c.lineTo(ax - Math.cos(ang) * 14 - Math.sin(ang) * 7, ay - Math.sin(ang) * 14 + Math.cos(ang) * 7);
+    c.closePath();
+    c.fill();
+    c.restore();
+  }
+
+  function drawHintSteerCue(c, fit, car, coach) {
+    if (!car || !coach || !coach.steer || coach.steer === "center") return;
+    // Arc beside car showing recommended steer (world space; chase cam will rotate)
+    const side = coach.steer === "left" ? -1 : 1;
+    const cAng = car.angle;
+    const ox = car.x + Math.cos(cAng) * car.length * 0.15;
+    const oy = car.y + Math.sin(cAng) * car.length * 0.15;
+    c.save();
+    c.translate(ox * fit, oy * fit);
+    c.rotate(cAng);
+    c.strokeStyle = coach.status === "ok" ? "rgba(74, 222, 128, 0.95)" : "rgba(250, 204, 21, 0.95)";
+    c.fillStyle = c.strokeStyle;
+    c.lineWidth = 3;
+    c.beginPath();
+    const r = fit * 1.1;
+    c.arc(0, 0, r, -side * 0.15, -side * 1.1, side < 0);
+    c.stroke();
+    // Chevron
+    const tipX = Math.cos(-side * 1.1) * r;
+    const tipY = Math.sin(-side * 1.1) * r;
+    c.beginPath();
+    c.moveTo(tipX, tipY);
+    c.lineTo(tipX - 8, tipY - side * 6);
+    c.lineTo(tipX + 4, tipY - side * 8);
+    c.closePath();
+    c.fill();
+    c.fillStyle = "#0f172a";
+    c.font = "bold 11px Segoe UI, sans-serif";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.rotate(-cAng);
+    c.fillStyle = coach.status === "ok" ? "#86efac" : "#fde047";
+    c.fillText(coach.steer === "left" ? "◀ STEER" : "STEER ▶", 0, -r - 10);
+    c.restore();
   }
 
   function drawHintSteps(c, fit) {
     if (!state.hintsOn || !state.hintSteps.length) return;
     const steps = state.hintSteps;
     const active = state.hintStepIndex;
+    const guided = state.hintGuided;
+    if (guided && state.car) {
+      drawHintGuidePath(c, fit, state.car, steps, active);
+    }
     for (let i = 0; i < steps.length; i++) {
       const s = steps[i];
       const isActive = i === active;
       const done = i < active;
       if (!isActive && !done) {
-        // Future steps: very faint outline only
         c.save();
         c.translate(s.x * fit, s.y * fit);
         c.rotate(s.angle || 0);
         const w = s.w * fit;
         const h = s.h * fit;
-        c.strokeStyle = "rgba(147, 197, 253, 0.22)";
+        c.strokeStyle = guided ? "rgba(147, 197, 253, 0.35)" : "rgba(147, 197, 253, 0.22)";
         c.lineWidth = 1.2;
         c.setLineDash([5, 5]);
         c.strokeRect(-w / 2, -h / 2, w, h);
@@ -380,21 +535,22 @@
         c.fillStyle = "rgba(148, 163, 184, 0.08)";
         c.lineWidth = 1.5;
       } else {
-        c.strokeStyle = "rgba(56, 189, 248, 0.95)";
-        c.fillStyle = "rgba(56, 189, 248, 0.16)";
-        c.lineWidth = 2.5;
+        const pulse = guided ? 0.5 + 0.5 * Math.sin(state.time * 4) : 1;
+        c.strokeStyle = "rgba(56, 189, 248, " + (0.75 + 0.2 * pulse) + ")";
+        c.fillStyle = guided
+          ? "rgba(56, 189, 248, " + (0.18 + 0.1 * pulse) + ")"
+          : "rgba(56, 189, 248, 0.16)";
+        c.lineWidth = guided ? 3.2 : 2.5;
       }
       c.setLineDash(isActive ? [10, 6] : []);
       c.fillRect(-w / 2, -h / 2, w, h);
       c.strokeRect(-w / 2, -h / 2, w, h);
       c.setLineDash([]);
-      // Nose tick
       c.strokeStyle = isActive ? "rgba(125, 211, 252, 0.95)" : "rgba(148, 163, 184, 0.5)";
       c.beginPath();
       c.moveTo(w / 2 - 2, 0);
       c.lineTo(w / 2 + fit * 0.35, 0);
       c.stroke();
-      // Label upright in world (counter-rotate)
       c.rotate(-(s.angle || 0));
       c.fillStyle = isActive ? "#7dd3fc" : "rgba(203, 213, 225, 0.7)";
       c.font = `bold ${Math.max(10, fit * 0.38)}px Segoe UI, sans-serif`;
@@ -402,6 +558,9 @@
       c.textBaseline = "middle";
       c.fillText(s.label || "", 0, 0);
       c.restore();
+    }
+    if (guided && state.car && state.hintCoach) {
+      drawHintSteerCue(c, fit, state.car, state.hintCoach);
     }
   }
 
@@ -1135,6 +1294,7 @@
       }
 
       updateHintProgress(dt);
+      updateHintHud();
       updateHud();
     }
 
