@@ -68,11 +68,11 @@
 
   /**
    * Near-minimum parallel bay for the selected vehicle.
-   * Length clearance ~10%, width ~6% — tight but completable.
+   * Length clearance ~20%, width ~6% — tight but completable.
    */
   function minParallelBay(vehicle) {
     return {
-      length: vehicle.length * 1.1,
+      length: vehicle.length * 1.2,
       width: vehicle.width * 1.06,
       angleTol: 0.12,
       coverFrac: 0.9,
