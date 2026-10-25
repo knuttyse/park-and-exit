@@ -33,6 +33,9 @@
     hintHold: 0,
     hintGuided: false,
     hintCoach: null,
+    demoPath: null,
+    demoPlaying: false,
+    demoT: 0,
   };
 
   const canvas = document.getElementById("game");
@@ -300,6 +303,10 @@
       state.hintStepIndex = 0;
       state.hintGuided = false;
       state.hintCoach = null;
+      state.demoPath = null;
+      state.demoPlaying = false;
+      state.demoT = 0;
+      syncDemoButtonUi();
       return;
     }
     const v = vehicleById(state.vehicleId);
@@ -310,6 +317,7 @@
     state.hintStepIndex = 0;
     state.hintHold = 0;
     state.hintCoach = null;
+    rebuildDemoPath();
   }
 
   function updateHintHud() {
@@ -564,6 +572,170 @@
     }
   }
 
+  // ——— Line demo (level 1) ———
+  function levelSupportsDemo() {
+    const lvl = state.activeLevel || baseLevel();
+    return !!(lvl && lvl.id === "parallel-in");
+  }
+
+  function rebuildDemoPath() {
+    const api = window.ParkHints;
+    state.demoPlaying = false;
+    state.demoT = 0;
+    if (!api || !api.buildDemoPath || !state.activeLevel) {
+      state.demoPath = null;
+      syncDemoButtonUi();
+      return;
+    }
+    const v = vehicleById(state.vehicleId);
+    state.demoPath = api.buildDemoPath(state.activeLevel, v);
+    syncDemoButtonUi();
+  }
+
+  function syncDemoButtonUi() {
+    const btn = document.getElementById("btn-demo");
+    if (!btn) return;
+    const show = state.screen === "game" && levelSupportsDemo();
+    btn.classList.toggle("hidden", !show);
+    if (!show) return;
+    const playing = state.demoPlaying;
+    const hasPath =
+      state.demoPath && state.demoPath.poses && state.demoPath.poses.length > 1;
+    btn.disabled = !hasPath;
+    btn.textContent = playing ? "Replay demo" : "Demo";
+    btn.title = playing
+      ? "Replay the parallel-park line demo"
+      : "Play an animated demo path into the bay";
+  }
+
+  function playDemo() {
+    if (!levelSupportsDemo()) return;
+    if (!state.demoPath || !state.demoPath.poses || state.demoPath.poses.length < 2) {
+      rebuildDemoPath();
+    }
+    if (!state.demoPath || !state.demoPath.poses || state.demoPath.poses.length < 2) {
+      return;
+    }
+    state.demoPlaying = true;
+    state.demoT = 0;
+    syncDemoButtonUi();
+  }
+
+  function updateDemo(dt) {
+    if (!state.demoPlaying || !state.demoPath) return;
+    const dur = state.demoPath.duration || 8;
+    state.demoT += dt;
+    if (state.demoT >= dur) {
+      state.demoT = dur;
+      state.demoPlaying = false;
+      syncDemoButtonUi();
+    }
+  }
+
+  function demoPoseAt(t) {
+    const path = state.demoPath;
+    if (!path || !path.poses || !path.poses.length) return null;
+    const poses = path.poses;
+    const dur = path.duration || 8;
+    const u = Math.max(0, Math.min(1, t / dur));
+    const f = u * (poses.length - 1);
+    const i = Math.min(poses.length - 2, Math.floor(f));
+    const local = f - i;
+    const a = poses[i];
+    const b = poses[i + 1];
+    const ang =
+      a.angle +
+      (function (d) {
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        return d;
+      })(b.angle - a.angle) *
+        local;
+    return {
+      x: a.x + (b.x - a.x) * local,
+      y: a.y + (b.y - a.y) * local,
+      angle: ang,
+    };
+  }
+
+  function drawDemo(c, fit) {
+    const path = state.demoPath;
+    if (!path || !path.poses || path.poses.length < 2) return;
+    if (!state.demoPlaying && state.demoT <= 0) return;
+    const poses = path.poses;
+    const dur = path.duration || 8;
+    const u = Math.max(0, Math.min(1, state.demoT / dur));
+    const showCount = Math.max(2, Math.floor(u * (poses.length - 1)) + 1);
+
+    // Full path (faint)
+    c.save();
+    c.strokeStyle = "rgba(167, 243, 208, 0.28)";
+    c.lineWidth = 2;
+    c.setLineDash([4, 6]);
+    c.beginPath();
+    c.moveTo(poses[0].x * fit, poses[0].y * fit);
+    for (let i = 1; i < poses.length; i++) {
+      c.lineTo(poses[i].x * fit, poses[i].y * fit);
+    }
+    c.stroke();
+    c.setLineDash([]);
+
+    // Animated progress stroke
+    c.strokeStyle = "rgba(52, 211, 153, 0.95)";
+    c.lineWidth = 3.2;
+    c.lineJoin = "round";
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(poses[0].x * fit, poses[0].y * fit);
+    for (let i = 1; i < showCount; i++) {
+      c.lineTo(poses[i].x * fit, poses[i].y * fit);
+    }
+    // interpolate to exact demo head
+    const head = demoPoseAt(state.demoT);
+    if (head) c.lineTo(head.x * fit, head.y * fit);
+    c.stroke();
+
+    // Ghost car
+    if (head) {
+      const v = vehicleById(state.vehicleId);
+      c.globalAlpha = 0.45;
+      drawVehicleShape(
+        c,
+        {
+          x: head.x,
+          y: head.y,
+          angle: head.angle,
+          length: v.length,
+          width: v.width,
+          color: "#6ee7b7",
+          roof: "#a7f3d0",
+          window: "#064e3b",
+          flashing: 0,
+        },
+        fit,
+        true
+      );
+      c.globalAlpha = 1;
+      // nose arrow on trail tip
+      c.fillStyle = "#34d399";
+      c.beginPath();
+      const ang = head.angle;
+      const ax = head.x * fit + Math.cos(ang) * fit * 0.55;
+      const ay = head.y * fit + Math.sin(ang) * fit * 0.55;
+      c.moveTo(ax, ay);
+      c.lineTo(
+        ax - Math.cos(ang) * 12 + Math.sin(ang) * 7,
+        ay - Math.sin(ang) * 12 - Math.cos(ang) * 7
+      );
+      c.lineTo(
+        ax - Math.cos(ang) * 12 - Math.sin(ang) * 7,
+        ay - Math.sin(ang) * 12 + Math.cos(ang) * 7
+      );
+      c.closePath();
+      c.fill();
+    }
+    c.restore();
+  }
 
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
@@ -1147,6 +1319,7 @@
 
     // Hint ghost boxes (world space, under chase camera)
     drawHintSteps(ctx, fit);
+    drawDemo(ctx, fit);
 
     ctx.restore();
 
@@ -1252,6 +1425,7 @@
     showScreen("game");
     resizeCanvas();
     syncHintToggleUi();
+    syncDemoButtonUi();
     updateHud();
     // Show touch controls on coarse pointers
     const tc = document.getElementById("touch-controls");
@@ -1295,7 +1469,10 @@
 
       updateHintProgress(dt);
       updateHintHud();
+      updateDemo(dt);
       updateHud();
+    } else if (state.demoPlaying) {
+      updateDemo(dt);
     }
 
     render();
@@ -1468,7 +1645,14 @@
       advanceHintStep(true);
     });
   }
+  const btnDemo = document.getElementById("btn-demo");
+  if (btnDemo) {
+    btnDemo.addEventListener("click", function () {
+      playDemo();
+    });
+  }
   syncHintToggleUi();
+  syncDemoButtonUi();
 
   // Boot
   buildVehiclePicker();

@@ -452,8 +452,13 @@ kbd {
 .hud-hint-coach.coach-fix { color: #fdba74; }
 .hud-hint-step.hidden,
 .hud-hint-coach.hidden,
-#btn-hint-next.hidden {
+#btn-hint-next.hidden,
+#btn-demo.hidden {
   display: none;
+}
+#btn-demo:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 #btn-hints-hud[aria-pressed="true"] {
   color: var(--accent);

@@ -42,7 +42,7 @@ Generic names only (no trademarks):
 
 Parallel park targets are sized from the selected car (~20% length and ~6% width clearance). Parallel **curbs** only stop the wheels from rolling onto the sidewalk — they never count as bumps (walls and other cars still do). An on-screen arrow points to the TARGET/EXIT when it is off-camera.
 
-**Hint mode** (optional): step boxes for each manoeuvre. On **level 1 (Parallel park)** hints are interactive — live coaching text (steer / reverse / stop), a path arrow to the current step, and a steer cue, with forgiving early step detection that locks into the teaching sequence.
+**Hint mode** (optional): step boxes for each manoeuvre. On **level 1 (Parallel park)** hints are interactive — live coaching text (steer / reverse / stop), a path arrow to the current step, and a steer cue, with forgiving early step detection that locks into the teaching sequence. Level 1 also has a **Demo / Replay demo** button: an animated street-side line (and ghost car) tracing a correct parallel park into the bay. Other levels keep empty demo placeholders.
 
 
 ## GitHub Pages

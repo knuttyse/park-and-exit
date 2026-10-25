@@ -589,6 +589,107 @@
     return { type: type, steps: steps, guided: guided };
   }
 
+
+  function lerpAngle(a, b, t) {
+    return a + wrapAngle(b - a) * t;
+  }
+
+  function sampleSegment(a, b, n, out) {
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      out.push({
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+        angle: lerpAngle(a.angle, b.angle, t),
+      });
+    }
+  }
+
+  function clampPoseToCurb(pose, vehicle, curbLine) {
+    if (!curbLine || !vehicle) return pose;
+    const box = {
+      x: pose.x,
+      y: pose.y,
+      w: vehicle.length,
+      h: vehicle.width,
+      angle: pose.angle,
+    };
+    clampBoxToCurb(box, curbLine, 0.06);
+    pose.x = box.x;
+    pose.y = box.y;
+    return pose;
+  }
+
+  /**
+   * Level-1 parallel-in demo: dense street-side poses tracing a correct park.
+   * Other levels: empty placeholder (no-op).
+   */
+  function buildParallelInDemoPath(lvl, vehicle) {
+    const steps = buildParallelSteps(lvl, vehicle);
+    const spawn = lvl.spawn || { x: steps[0].x, y: steps[0].y, angle: steps[0].angle };
+    const curbLine = getCurbLine(lvl);
+    const pull = steps[0];
+    const rev = steps[1];
+    const str = steps[2];
+    const fin = steps[3];
+    // Finish facing pull-up heading (natural travel direction; success allows either)
+    const finish = { x: fin.x, y: fin.y, angle: pull.angle };
+    const approach = {
+      x: spawn.x * 0.45 + pull.x * 0.55,
+      y: spawn.y * 0.4 + pull.y * 0.6,
+      angle: spawn.angle,
+    };
+    // Soft reverse start: ease back from pull toward bay before full angle-in
+    const reverseStart = {
+      x: pull.x * 0.65 + rev.x * 0.35,
+      y: pull.y * 0.7 + rev.y * 0.3,
+      angle: lerpAngle(pull.angle, rev.angle, 0.35),
+    };
+    const keys = [
+      { x: spawn.x, y: spawn.y, angle: spawn.angle },
+      approach,
+      { x: pull.x, y: pull.y, angle: pull.angle },
+      { x: pull.x, y: pull.y, angle: pull.angle }, // brief "stop" dwell via dense samples
+      reverseStart,
+      { x: rev.x, y: rev.y, angle: rev.angle },
+      { x: str.x, y: str.y, angle: str.angle },
+      finish,
+    ];
+    const counts = [14, 16, 5, 10, 16, 12, 14];
+    const poses = [
+      { x: keys[0].x, y: keys[0].y, angle: keys[0].angle },
+    ];
+    for (let i = 0; i < keys.length - 1; i++) {
+      sampleSegment(keys[i], keys[i + 1], counts[i], poses);
+    }
+    for (let i = 0; i < poses.length; i++) {
+      clampPoseToCurb(poses[i], vehicle, curbLine);
+    }
+    return {
+      id: lvl.id,
+      poses: poses,
+      duration: 8.5,
+      label: "Parallel park demo",
+    };
+  }
+
+  /** Demo path for a level — L1 only; others return empty placeholder. */
+  function buildDemoPath(lvl, vehicle) {
+    if (!lvl || !vehicle) {
+      return { id: null, poses: [], duration: 0, label: "" };
+    }
+    if (lvl.id === "parallel-in") {
+      return buildParallelInDemoPath(lvl, vehicle);
+    }
+    // Placeholders / no-ops for every other level
+    return {
+      id: lvl.id || null,
+      poses: [],
+      duration: 0,
+      label: "",
+    };
+  }
+
   /** True if car roughly matches a step box (center + heading). */
   function carMatchesHintStep(car, step, opts) {
     opts = opts || {};
@@ -614,5 +715,6 @@
     isGuidedParallel: isGuidedParallel,
     stepMatchOpts: stepMatchOpts,
     liveCoach: liveCoach,
+    buildDemoPath: buildDemoPath,
   };
 })();
