@@ -139,7 +139,7 @@
       return !(w.h < 0.6 && w.w > lvl.worldW * 0.4);
     });
     // Curb flush with sidewalk long edge. Street-face = bay outer long edge.
-    // Full car body must stay street-side of the street-face line (no bumper overhang).
+    // Wheels stay street-side of the street-face line; curb contact never counts as a bump.
     const curbLy = curbSide * (bh / 2 + bay.curbThick / 2);
     const curbPos = localToWorld(0, curbLy);
     const face = localToWorld(0, curbSide * (bh / 2));
@@ -578,35 +578,50 @@
   }
 
   // ——— Collisions ———
+  /** Four wheel contact points from bicycle geometry (front/rear × left/right). */
+  function carWheelPositions(car) {
+    const c = Math.cos(car.angle);
+    const s = Math.sin(car.angle);
+    const halfWb = (car.wheelbase || car.length * 0.62) * 0.5;
+    const halfTrack = car.width * 0.42;
+    const pts = [
+      [halfWb, halfTrack],
+      [halfWb, -halfTrack],
+      [-halfWb, halfTrack],
+      [-halfWb, -halfTrack],
+    ];
+    return pts.map(function (p) {
+      return {
+        x: car.x + p[0] * c - p[1] * s,
+        y: car.y + p[0] * s + p[1] * c,
+      };
+    });
+  }
+
   /**
-   * Hard curb: the full car rectangle (bumper/corners) must stay street-side of curbLine.
-   * No overhang onto curb/sidewalk. Push along street normal + damp speed into the curb.
+   * Wheel-only curb: keep all four wheels street-side of curbLine.
+   * Does not count as a bump — body/bumper may visually approach the curb.
    */
-  function constrainBodyToCurb(car, curbLine) {
-    if (!curbLine) return false;
-    const pad = 0.02; // tiny clearance so bumper never visually kisses the curb
-    const corners = obbCorners(car.x, car.y, car.length, car.width, car.angle);
-    let worst = Infinity;
-    for (let i = 0; i < corners.length; i++) {
-      const p = corners[i];
-      const d =
-        (p.x - curbLine.ox) * curbLine.nx + (p.y - curbLine.oy) * curbLine.ny;
+  function constrainWheelsToCurb(car, curbLine) {
+    if (!curbLine) return;
+    const wheels = carWheelPositions(car);
+    let worst = 0; // most negative = deepest into sidewalk
+    for (let i = 0; i < wheels.length; i++) {
+      const w = wheels[i];
+      const d = (w.x - curbLine.ox) * curbLine.nx + (w.y - curbLine.oy) * curbLine.ny;
       if (d < worst) worst = d;
     }
-    if (worst >= pad) return false;
-    const push = pad - worst;
+    if (worst >= -0.002) return;
+    const push = -worst;
     car.x += curbLine.nx * push;
     car.y += curbLine.ny * push;
     const into =
       Math.cos(car.angle) * -curbLine.nx + Math.sin(car.angle) * -curbLine.ny;
-    if (car.speed * into > 0.02) {
-      car.speed *= -0.2;
+    if (car.speed * into > 0.05) {
+      // Slide along curb — kill into-sidewalk component, no bump
+      car.speed *= 0.35;
       if (Math.abs(car.speed) < 0.35) car.speed = 0;
-    } else {
-      car.speed *= 0.5;
-      if (Math.abs(car.speed) < 0.25) car.speed = 0;
     }
-    return true;
   }
 
   function resolveCollisions(car, lvl) {
@@ -615,15 +630,8 @@
 
     const solids = [];
     for (const w of lvl.walls || []) {
-      // Curb strips are hard body barriers too (SAT); curbLine is the authority for flush face
-      solids.push({
-        x: w.x,
-        y: w.y,
-        length: w.w,
-        width: w.h,
-        angle: 0,
-        kind: w.curb ? "curb" : "wall",
-      });
+      if (w.curb) continue; // curb never bumps — wheels handled separately
+      solids.push({ x: w.x, y: w.y, length: w.w, width: w.h, angle: 0, kind: "wall" });
     }
     for (const o of lvl.obstacles || []) {
       if (o.kind === "car") {
@@ -645,8 +653,8 @@
       body.y = car.y;
     }
 
-    // Full-body street-side of curbLine — bumper cannot touch/overhang sidewalk
-    if (constrainBodyToCurb(car, lvl.curbLine)) hit = true;
+    // Wheels stop at curb; never counts as a collision bump
+    constrainWheelsToCurb(car, lvl.curbLine);
 
     // Keep in soft world bounds
     car.x = clamp(car.x, 0.5, lvl.worldW - 0.5);

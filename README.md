@@ -40,7 +40,7 @@ Generic names only (no trademarks):
 
 30 levels with rising difficulty: parallel in/out (vehicle-scaled minimal bay + curb flush), perpendicular / angle park & exit, nose-in aisle exercises (90° approach), narrow lanes, and wagon/lorry challenges.
 
-Parallel park targets are sized from the selected car (~20% length and ~6% width clearance). Parallel **curbs** are a hard barrier for the whole car rectangle — the bumper cannot touch or overhang the sidewalk. An on-screen arrow points to the TARGET/EXIT when it is off-camera.
+Parallel park targets are sized from the selected car (~20% length and ~6% width clearance). Parallel **curbs** only stop the wheels from rolling onto the sidewalk — they never count as bumps (walls and other cars still do). An on-screen arrow points to the TARGET/EXIT when it is off-camera.
 
 
 ## GitHub Pages
