@@ -81,14 +81,20 @@
    * Length clearance ~20%, width ~6% — tight but completable.
    */
   function minParallelBay(vehicle) {
+    // Lateral bay grows by curbCarGap so the painted spot uses the 15 cm
+    // curb offset; cars still sit curbCarGap from the curb face.
+    // endGap scales with length so reverse-in can straighten without
+    // immediately kissing the trailing bumper.
+    const curbCarGap = 0.15;
     return {
-      length: vehicle.length * 1.2,
-      width: vehicle.width * 1.06,
+      length: vehicle.length * 1.22,
+      width: vehicle.width * 1.06 + curbCarGap,
       angleTol: 0.12,
       coverFrac: 0.9,
       speedMax: 0.42,
-      endGap: 0.12,
+      endGap: Math.max(0.35, Math.min(0.7, vehicle.length * 0.1)),
       curbThick: 0.4,
+      curbCarGap: curbCarGap,
       neighbourLength: Math.max(4.3, Math.min(5.2, vehicle.length * 0.95)),
       neighbourWidth: Math.max(1.7, Math.min(2.05, vehicle.width * 0.98)),
     };
@@ -100,7 +106,8 @@
 
   /**
    * Rebuild parallel bay/target/curb/end-cars from the selected vehicle.
-   * Curb is flush with the sidewalk-side long edge (no free swing space).
+   * Curb face sits curbCarGap (0.15 m) sidewalk of the parked/player car
+   * curb-side body line so cars have 15 cm streetward of the curb face.
    */
   function applyParallelLayout(lvl, vehicle) {
     const meta = lvl.parallel;
@@ -114,6 +121,7 @@
     const bh = bay.width;
     const c = Math.cos(ang);
     const s = Math.sin(ang);
+    const curbCarGap = bay.curbCarGap != null ? bay.curbCarGap : 0.15;
 
     function localToWorld(lx, ly) {
       return { x: cx + lx * c - ly * s, y: cy + lx * s + ly * c };
@@ -143,11 +151,12 @@
     lvl.walls = (lvl.walls || []).filter(function (w) {
       return !(w.h < 0.6 && w.w > lvl.worldW * 0.4);
     });
-    // Curb flush with sidewalk long edge. Street-face = bay outer long edge.
+    // Curb face = car curb-side body + curbCarGap toward sidewalk.
     // Wheels stay street-side of the street-face line; curb contact never counts as a bump.
-    const curbLy = curbSide * (bh / 2 + bay.curbThick / 2);
+    const faceLy = curbSide * (vehicle.width / 2 + curbCarGap);
+    const curbLy = faceLy + curbSide * (bay.curbThick / 2);
     const curbPos = localToWorld(0, curbLy);
-    const face = localToWorld(0, curbSide * (bh / 2));
+    const face = localToWorld(0, faceLy);
     const street = -curbSide;
     // Local (0, street) → world normal pointing toward street / roadway
     const snx = -street * s;
@@ -166,6 +175,7 @@
       ny: sny,
       ang: ang,
       curbSide: curbSide,
+      carGap: curbCarGap,
     };
 
     // Drop previous framing cars on the same curb row; place tight neighbours

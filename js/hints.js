@@ -786,8 +786,9 @@
 
   /**
    * Level-1 parallel-in demo via bicycle-model poses (no sideways lerp/slide).
-   * OBB+margin vs parked cars (esp. trailing neighbour); wheels street of curb
-   * (bumper may overhang); ends in a pose that passes game success checks.
+   * Uses the 0.15 m curb–car gap so reverse-in can straighten with few
+   * back-and-forth shuffles. OBB+margin vs parked cars (esp. trailing);
+   * wheels street of curb (bumper may overhang); ends in a success pose.
    */
   function buildParallelInDemoPath(lvl, vehicle) {
     const steps = buildParallelSteps(lvl, vehicle);
@@ -858,20 +859,25 @@
 
     /**
      * Candidate reverse-in params (along/street relative to fin).
-     * Tried in order until one ends poseLooksParked — covers hatch…lorry.
+     * Tuned for the 0.15 m curb–car gap + scaled endGap: reverse deeper into
+     * the bay (stopPast/revPast) so straighten needs far fewer shuffles.
+     * Ordered roughly best-first; selection prefers fewest shuffle cycles.
      */
     const parkCandidates = [
-      { margin: 0.08, along: 6.5, street: 2.9, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
-      { margin: 0.08, along: 6.5, street: 3.6, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
-      { margin: 0.12, along: 6.5, street: 2.7, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
-      { margin: 0.12, along: 7.5, street: 2.9, angMag: 0.55, biteFrac: 1.0, biteN: 20, revPast: 0.5, stopPast: 0.45 },
-      { margin: 0.12, along: 6.5, street: 2.4, angMag: 0.55, biteFrac: 0.7, biteN: 15, revPast: 0.35, stopPast: 0.15 },
-      { margin: 0.12, along: 6.5, street: 2.4, angMag: 0.55, biteFrac: 1.0, biteN: 15, revPast: 0.35, stopPast: 0.15 },
-      { margin: 0.1, along: 6.5, street: 2.4, angMag: 0.6, biteFrac: 1.0, biteN: 15, revPast: 0.35, stopPast: 0.15 },
-      { margin: 0.08, along: 6.5, street: 2.7, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
-      { margin: 0.08, along: 7.5, street: 2.7, angMag: 0.55, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
-      { margin: 0.08, along: 7.5, street: 3.6, angMag: 0.65, biteFrac: 0.7, biteN: 20, revPast: 0.5, stopPast: 0.45 },
-      { margin: 0.05, along: 6.5, street: 2.7, angMag: 0.65, biteFrac: 0.7, biteN: 25, revPast: 0.45, stopPast: 0.3 },
+      // ~2–4 cycles for hatch/wagon/sedan/van
+      { margin: 0.08, along: 8.0, street: 3.0, angMag: 0.55, midLat: 0.6, stopPast: 0.8, biteFrac: 0.6, biteN: 24, latTarget: 0.02, fwdTarget: -0.1, revPast: 0.8 },
+      { margin: 0.07, along: 8.5, street: 3.5, angMag: 0.6, midLat: 0.5, stopPast: 0.65, biteFrac: 0.8, biteN: 36, latTarget: 0.02, fwdTarget: -0.3, revPast: 0.65 },
+      { margin: 0.12, along: 7.0, street: 3.0, angMag: 0.6, midLat: 0.6, stopPast: 0.8, biteFrac: 1.0, biteN: 18, latTarget: 0.0, fwdTarget: -0.2, revPast: 0.8 },
+      { margin: 0.07, along: 8.5, street: 2.8, angMag: 0.5, midLat: 0.6, stopPast: 0.8, biteFrac: 0.9, biteN: 24, latTarget: 0.02, fwdTarget: -0.2, revPast: 0.8 },
+      // ~4 cycles for lorry (uses deeper reverse + softer angle-in)
+      { margin: 0.06, along: 9.5, street: 2.8, angMag: 0.45, midLat: 0.55, stopPast: 0.5, biteFrac: 0.95, biteN: 30, latTarget: 0.05, fwdTarget: -0.5, revPast: 1.0 },
+      { margin: 0.08, along: 10.0, street: 2.8, angMag: 0.55, midLat: 0.45, stopPast: 0.5, biteFrac: 0.95, biteN: 24, latTarget: 0.05, fwdTarget: -0.15, revPast: 1.2 },
+      { margin: 0.1, along: 9.0, street: 2.8, angMag: 0.65, midLat: 0.4, stopPast: 0.8, biteFrac: 0.9, biteN: 18, latTarget: -0.05, fwdTarget: -0.3, revPast: 0.8 },
+      // Fallbacks with curb-gap-aware deeper reverse
+      { margin: 0.08, along: 7.5, street: 3.2, angMag: 0.6, midLat: 0.5, stopPast: 0.7, biteFrac: 0.75, biteN: 28, latTarget: 0.02, fwdTarget: -0.2, revPast: 0.7 },
+      { margin: 0.1, along: 8.0, street: 3.0, angMag: 0.55, midLat: 0.55, stopPast: 0.75, biteFrac: 0.85, biteN: 22, latTarget: 0.0, fwdTarget: -0.25, revPast: 0.75 },
+      { margin: 0.12, along: 6.5, street: 2.9, angMag: 0.65, midLat: 0.5, stopPast: 0.55, biteFrac: 0.7, biteN: 20, latTarget: 0.02, fwdTarget: -0.1, revPast: 0.55 },
+      { margin: 0.08, along: 7.5, street: 3.6, angMag: 0.65, midLat: 0.5, stopPast: 0.6, biteFrac: 0.7, biteN: 20, latTarget: 0.02, fwdTarget: -0.15, revPast: 0.55 },
     ];
 
     function pullFromCandidate(opts) {
@@ -884,10 +890,13 @@
 
     /**
      * Simulate reverse-in from pull; optionally append poses.
-     * Returns final state (and whether it looks parked).
+     * Returns final state, whether it looks parked, and shuffle cycle count.
      */
     function simulateParkFromPull(pull, opts, posesOut) {
       const carMargin = opts.margin;
+      const midLat = opts.midLat != null ? opts.midLat : 0.5;
+      const latTarget = opts.latTarget != null ? opts.latTarget : 0.02;
+      const fwdTarget = opts.fwdTarget != null ? opts.fwdTarget : -0.1;
       const state = { x: pull.x, y: pull.y, angle: pull.angle };
       function rec() {
         if (posesOut) posesOut.push({ x: state.x, y: state.y, angle: state.angle });
@@ -937,7 +946,7 @@
       }
 
       rec();
-      // Clear of lead, angle-in, hold, straighten (stop short of trailer)
+      // Clear of lead, angle-in, hold, straighten (use curb gap + endGap room)
       drive(-1.7, 0, 28, null);
       drive(
         -2.05,
@@ -947,54 +956,55 @@
           return Math.abs(wrapAngle(s.angle - (finishAng + turnSign * opts.angMag))) < 0.05;
         }
       );
-      drive(-1.75, 0, 45, function (s) {
-        return latToFin(s) < 0.5;
+      drive(-1.75, 0, 55, function (s) {
+        return latToFin(s) < midLat;
       });
-      drive(-1.4, straightenSteer, 130, function (s) {
+      drive(-1.4, straightenSteer, 160, function (s) {
         if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.05) return true;
         if (pastBayCenter(s) > opts.stopPast) return true;
         return false;
       });
 
-      // Saw / shuffle into bay
-      for (let cyc = 0; cyc < 40; cyc++) {
+      // Few big shuffles into bay (curb gap lets each bite take more lateral)
+      let cycles = 0;
+      for (; cycles < 16; cycles++) {
         if (poseLooksParked(state)) break;
-        if (pastBayCenter(state) > 0.12 || Math.abs(wrapAngle(state.angle - finishAng)) > 0.1) {
+        if (pastBayCenter(state) > 0.08 || Math.abs(wrapAngle(state.angle - finishAng)) > 0.08) {
           drive(
-            1.15,
+            1.2,
             function (s) {
               return steerTowardHeading(s.angle, finishAng, false, maxSteer);
             },
-            45,
+            55,
             function (s) {
-              return pastBayCenter(s) < -0.1 && Math.abs(wrapAngle(s.angle - finishAng)) < 0.05;
+              return pastBayCenter(s) < fwdTarget && Math.abs(wrapAngle(s.angle - finishAng)) < 0.04;
             }
           );
         }
-        drive(-1.5, angleInSteer * opts.biteFrac, opts.biteN, function (s) {
-          return latToFin(s) < 0.02 || pastBayCenter(s) > opts.revPast;
+        drive(-1.55, angleInSteer * opts.biteFrac, opts.biteN, function (s) {
+          return latToFin(s) < latTarget || pastBayCenter(s) > opts.revPast;
         });
-        drive(-1.1, straightenSteer, 40, function (s) {
-          if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.04) return true;
-          if (pastBayCenter(s) > opts.revPast + 0.12) return true;
+        drive(-1.15, straightenSteer, 55, function (s) {
+          if (Math.abs(wrapAngle(s.angle - finishAng)) < 0.035) return true;
+          if (pastBayCenter(s) > opts.revPast + 0.15) return true;
           return false;
         });
         drive(
-          1.05,
+          1.1,
           function (s) {
             return steerTowardHeading(s.angle, finishAng, false, maxSteer);
           },
-          35,
+          45,
           function (s) {
             return (
-              Math.abs(wrapAngle(s.angle - finishAng)) < 0.04 && pastBayCenter(s) < 0.08
+              Math.abs(wrapAngle(s.angle - finishAng)) < 0.035 && pastBayCenter(s) < 0.06
             );
           }
         );
       }
 
       // Precision settle onto fin (cover needs ~parallel + centered)
-      for (let i = 0; i < 500; i++) {
+      for (let i = 0; i < 350; i++) {
         if (poseLooksParked(state)) break;
         const lat = latToFin(state);
         const angE = wrapAngle(state.angle - finishAng);
@@ -1002,24 +1012,20 @@
         let speed = 0;
         let steer = 0;
         if (past > 0.55) {
-          speed = 0.75;
+          speed = 0.8;
           steer = steerTowardHeading(state.angle, finishAng, false, maxSteer);
-        } else if (lat > 0.04) {
-          const bf2 = Math.abs(angE) < 0.1 ? 0.28 : lat > 0.4 ? 0.85 : 0.5;
-          speed = -1.05;
+        } else if (lat > 0.03) {
+          const bf2 = Math.abs(angE) < 0.1 ? 0.3 : lat > 0.4 ? 0.85 : 0.55;
+          speed = -1.1;
           steer = angleInSteer * bf2;
         } else if (Math.abs(angE) > 0.01) {
-          speed = past > 0.05 ? 0.42 : -0.42;
+          speed = past > 0.05 ? 0.45 : -0.45;
           steer = steerTowardHeading(state.angle, finishAng, speed < 0, maxSteer);
-        } else if (Math.abs(past) > 0.03) {
-          speed = past > 0 ? 0.32 : -0.32;
-          // past>0 means past center toward trailer; go forward (negative past)
-          // pastBayCenter>0 → toward trailer along reverse dir → need forward (speed>0 when heading=finishAng? 
-          // heading π, forward speed>0 moves -x = toward lead = decreasing past. Yes speed = past>0 ? + : -
-          speed = past > 0 ? 0.32 : -0.32;
+        } else if (Math.abs(past) > 0.025) {
+          speed = past > 0 ? 0.35 : -0.35;
           steer = 0;
-        } else if (lat > 0.006) {
-          speed = -0.22;
+        } else if (lat > 0.005) {
+          speed = -0.25;
           steer = angleInSteer * 0.12;
         } else {
           break;
@@ -1051,12 +1057,13 @@
         rec();
       }
 
-      return { state: state, ok: poseLooksParked(state) };
+      return { state: state, ok: poseLooksParked(state), cycles: cycles };
     }
 
-    // Pick first candidate that parks successfully
+    // Prefer the successful candidate with the fewest shuffle cycles
     let chosen = null;
     let chosenPull = null;
+    let bestCycles = Infinity;
     for (let ci = 0; ci < parkCandidates.length; ci++) {
       const opts = parkCandidates[ci];
       const pull = pullFromCandidate(opts);
@@ -1074,10 +1081,11 @@
         continue;
       }
       const trial = simulateParkFromPull(pull, opts, null);
-      if (trial.ok) {
+      if (trial.ok && trial.cycles < bestCycles) {
         chosen = opts;
         chosenPull = pull;
-        break;
+        bestCycles = trial.cycles;
+        if (bestCycles <= 2) break;
       }
     }
     if (!chosen) {

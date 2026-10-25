@@ -4,7 +4,7 @@
  * Target bay: { x, y, w, h, angle } — center + size + desired heading.
  * Exit missions: target.exit = true, markings.exitZone optional.
  * Parallel park levels set `parallel: { center, angle, curbSide }` so the game
- * can rebuild a vehicle-scaled minimal bay with curb flush (no sidewalk swing).
+ * can rebuild a vehicle-scaled minimal bay with 0.15 m curb–car gap.
  */
 (function () {
   "use strict";
