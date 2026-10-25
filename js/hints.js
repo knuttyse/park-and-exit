@@ -594,81 +594,271 @@
     return a + wrapAngle(b - a) * t;
   }
 
-  function sampleSegment(a, b, n, out) {
-    for (let i = 1; i <= n; i++) {
-      const t = i / n;
-      out.push({
-        x: a.x + (b.x - a.x) * t,
-        y: a.y + (b.y - a.y) * t,
-        angle: lerpAngle(a.angle, b.angle, t),
-      });
+  function poseClearsCurb(x, y, angle, vehicle, curbLine, pad) {
+    if (!curbLine) return true;
+    pad = pad != null ? pad : 0.05;
+    const corners = obbCorners(x, y, vehicle.length, vehicle.width, angle);
+    for (let i = 0; i < corners.length; i++) {
+      const p = corners[i];
+      const d =
+        (p.x - curbLine.ox) * curbLine.nx + (p.y - curbLine.oy) * curbLine.ny;
+      if (d < pad) return false;
     }
-  }
-
-  function clampPoseToCurb(pose, vehicle, curbLine) {
-    if (!curbLine || !vehicle) return pose;
-    const box = {
-      x: pose.x,
-      y: pose.y,
-      w: vehicle.length,
-      h: vehicle.width,
-      angle: pose.angle,
-    };
-    clampBoxToCurb(box, curbLine, 0.06);
-    pose.x = box.x;
-    pose.y = box.y;
-    return pose;
+    return true;
   }
 
   /**
-   * Level-1 parallel-in demo: dense street-side poses tracing a correct park.
-   * Other levels: empty placeholder (no-op).
+   * Bicycle-model integration: velocity only along heading (no sideways slide).
+   * Rejects steps that would push the body past the curb.
+   */
+  function integrateBicycle(state, speed, steer, dt, vehicle, curbLine) {
+    const wb = vehicle.wheelbase || vehicle.length * 0.62;
+    const maxSteer = vehicle.steerAngle != null ? vehicle.steerAngle : 0.6;
+    if (steer > maxSteer) steer = maxSteer;
+    if (steer < -maxSteer) steer = -maxSteer;
+    let angle = state.angle;
+    if (Math.abs(speed) > 0.001 && Math.abs(steer) > 0.0005) {
+      angle += ((speed * Math.tan(steer)) / wb) * dt;
+    }
+    const nx = state.x + Math.cos(angle) * speed * dt;
+    const ny = state.y + Math.sin(angle) * speed * dt;
+    if (!poseClearsCurb(nx, ny, angle, vehicle, curbLine, 0.05)) {
+      // Try same motion with less steer (stay street-side without lateral push)
+      const steer2 = steer * 0.35;
+      let angle2 = state.angle;
+      if (Math.abs(speed) > 0.001 && Math.abs(steer2) > 0.0005) {
+        angle2 += ((speed * Math.tan(steer2)) / wb) * dt;
+      }
+      const nx2 = state.x + Math.cos(angle2) * speed * dt;
+      const ny2 = state.y + Math.sin(angle2) * speed * dt;
+      if (poseClearsCurb(nx2, ny2, angle2, vehicle, curbLine, 0.05)) {
+        state.x = nx2;
+        state.y = ny2;
+        state.angle = angle2;
+        return true;
+      }
+      // Roll straight along heading only
+      const nx3 = state.x + Math.cos(state.angle) * speed * dt;
+      const ny3 = state.y + Math.sin(state.angle) * speed * dt;
+      if (poseClearsCurb(nx3, ny3, state.angle, vehicle, curbLine, 0.05)) {
+        state.x = nx3;
+        state.y = ny3;
+        return true;
+      }
+      return false;
+    }
+    state.x = nx;
+    state.y = ny;
+    state.angle = angle;
+    return true;
+  }
+
+  /** Steer toward a world heading; flips for reverse (bicycle). */
+  function steerTowardHeading(angle, targetAngle, reversing, maxSteer) {
+    const err = wrapAngle(targetAngle - angle);
+    // Forward: +steer → +dAngle; reverse: +steer → -dAngle
+    const raw = reversing ? -err * 2.2 : err * 2.2;
+    if (raw > maxSteer) return maxSteer;
+    if (raw < -maxSteer) return -maxSteer;
+    return raw;
+  }
+
+  /** Pure-pursuit-ish steer toward a point while driving forward or reverse. */
+  function steerTowardPoint(state, tx, ty, reversing, maxSteer) {
+    const desired = Math.atan2(ty - state.y, tx - state.x);
+    // When reversing, the rear aims at the point → face opposite of travel-to-point
+    const face = reversing ? desired + Math.PI : desired;
+    return steerTowardHeading(state.angle, face, reversing, maxSteer);
+  }
+
+  /**
+   * Level-1 parallel-in demo via bicycle-model poses (no sideways lerp/slide).
+   * Tuned open-loop S-curve (angle-in → hold → counter-steer → creep), scaled by vehicle length.
    */
   function buildParallelInDemoPath(lvl, vehicle) {
     const steps = buildParallelSteps(lvl, vehicle);
-    const spawn = lvl.spawn || { x: steps[0].x, y: steps[0].y, angle: steps[0].angle };
+    const spawn =
+      lvl.spawn || { x: steps[0].x, y: steps[0].y, angle: steps[0].angle };
     const curbLine = getCurbLine(lvl);
     const pull = steps[0];
-    const rev = steps[1];
-    const str = steps[2];
-    const fin = steps[3];
-    // Finish facing pull-up heading (natural travel direction; success allows either)
-    const finish = { x: fin.x, y: fin.y, angle: pull.angle };
-    const approach = {
-      x: spawn.x * 0.45 + pull.x * 0.55,
-      y: spawn.y * 0.4 + pull.y * 0.6,
-      angle: spawn.angle,
-    };
-    // Soft reverse start: ease back from pull toward bay before full angle-in
-    const reverseStart = {
-      x: pull.x * 0.65 + rev.x * 0.35,
-      y: pull.y * 0.7 + rev.y * 0.3,
-      angle: lerpAngle(pull.angle, rev.angle, 0.35),
-    };
-    const keys = [
-      { x: spawn.x, y: spawn.y, angle: spawn.angle },
-      approach,
-      { x: pull.x, y: pull.y, angle: pull.angle },
-      { x: pull.x, y: pull.y, angle: pull.angle }, // brief "stop" dwell via dense samples
-      reverseStart,
-      { x: rev.x, y: rev.y, angle: rev.angle },
-      { x: str.x, y: str.y, angle: str.angle },
-      finish,
-    ];
-    const counts = [14, 16, 5, 10, 16, 12, 14];
-    const poses = [
-      { x: keys[0].x, y: keys[0].y, angle: keys[0].angle },
-    ];
-    for (let i = 0; i < keys.length - 1; i++) {
-      sampleSegment(keys[i], keys[i + 1], counts[i], poses);
+    const fin = { x: lvl.target.x, y: lvl.target.y };
+    const maxSteer = vehicle.steerAngle != null ? vehicle.steerAngle : 0.6;
+    const dt = 1 / 30;
+    const poses = [];
+    const state = { x: spawn.x, y: spawn.y, angle: spawn.angle };
+    const turnSign = steps[0].turnSign != null ? steps[0].turnSign : -1;
+    const len = vehicle.length || 4.6;
+    const angMag = Math.max(0.48, Math.min(0.62, 0.66 - 0.02 * len));
+    const clearN = 36;
+    const holdN = Math.max(22, Math.min(34, Math.round(40 - len * 2)));
+    const strN = Math.max(45, Math.min(110, Math.round(len * 14)));
+    const angleIn = pull.angle + turnSign * angMag;
+    const finishAng = pull.angle;
+    const angleInSteer = turnSign > 0 ? -maxSteer : maxSteer;
+    const straightenSteer = -angleInSteer;
+
+    let recordSkip = 0;
+    function record(force) {
+      if (!force && recordSkip++ % 2 === 1 && poses.length > 0) return;
+      poses.push({ x: state.x, y: state.y, angle: state.angle });
     }
-    for (let i = 0; i < poses.length; i++) {
-      clampPoseToCurb(poses[i], vehicle, curbLine);
+    function hold(n) {
+      for (let i = 0; i < n; i++) record(true);
     }
+    function drive(speed, steerFn, stepsMax, doneFn) {
+      let stalled = 0;
+      for (let i = 0; i < stepsMax; i++) {
+        const before = { x: state.x, y: state.y, angle: state.angle };
+        const steer = typeof steerFn === "number" ? steerFn : steerFn(state, i);
+        const ok = integrateBicycle(state, speed, steer, dt, vehicle, curbLine);
+        if (!ok) {
+          if (!integrateBicycle(state, speed * 0.5, steer, dt, vehicle, curbLine)) {
+            stalled++;
+            if (stalled > 8) break;
+            continue;
+          }
+        } else {
+          stalled = 0;
+        }
+        if (
+          Math.hypot(state.x - before.x, state.y - before.y) > 1e-6 ||
+          Math.abs(wrapAngle(state.angle - before.angle)) > 1e-5
+        ) {
+          record(false);
+        }
+        if (doneFn && doneFn(state, i)) break;
+      }
+    }
+
+    record(true);
+
+    // 1) Forward to pull-up
+    drive(
+      3.8,
+      function (s) {
+        return steerTowardPoint(s, pull.x, pull.y, false, maxSteer);
+      },
+      260,
+      function (s) {
+        return Math.hypot(s.x - pull.x, s.y - pull.y) < 1.05;
+      }
+    );
+    drive(
+      1.15,
+      function (s) {
+        return steerTowardHeading(s.angle, pull.angle, false, maxSteer * 0.8);
+      },
+      90,
+      function (s) {
+        return Math.hypot(s.x - pull.x, s.y - pull.y) < 0.32;
+      }
+    );
+    // Nudge forward while aligning heading (no in-place spin)
+    drive(
+      0.7,
+      function (s) {
+        return steerTowardHeading(s.angle, pull.angle, false, maxSteer * 0.9);
+      },
+      40,
+      function (s) {
+        return Math.abs(wrapAngle(s.angle - pull.angle)) < 0.05;
+      }
+    );
+    hold(8);
+
+    // 2) Reverse clear of the lead car
+    drive(-1.7, 0, clearN, null);
+
+    // 3) Angle-in (full lock toward curb)
+    drive(
+      -2.05,
+      angleInSteer,
+      100,
+      function (s) {
+        return Math.abs(wrapAngle(s.angle - angleIn)) < 0.07;
+      }
+    );
+
+    // 4) Hold angle, reverse deeper (wheels straight)
+    drive(-1.8, 0, holdN, null);
+
+    // 5) Counter-steer straighten while reversing
+    drive(
+      -1.6,
+      straightenSteer,
+      strN,
+      function (s) {
+        return Math.abs(wrapAngle(s.angle - finishAng)) < 0.09;
+      }
+    );
+
+    // 6) If still angled (long / tight vehicles), forward then reverse while seeking finish heading
+    if (Math.abs(wrapAngle(state.angle - finishAng)) > 0.18) {
+      drive(
+        1.3,
+        function (s) {
+          return steerTowardHeading(s.angle, finishAng, false, maxSteer);
+        },
+        50,
+        function (s) {
+          return Math.abs(wrapAngle(s.angle - finishAng)) < 0.1;
+        }
+      );
+      drive(
+        -1.45,
+        function (s) {
+          return steerTowardHeading(s.angle, finishAng, true, maxSteer);
+        },
+        60,
+        function (s) {
+          return Math.abs(wrapAngle(s.angle - finishAng)) < 0.1;
+        }
+      );
+    }
+
+    // 7) Creep along heading into bay center
+    for (let k = 0; k < 140; k++) {
+      const dx = fin.x - state.x;
+      const dy = fin.y - state.y;
+      const dist = Math.hypot(dx, dy);
+      const angErr = Math.abs(wrapAngle(state.angle - finishAng));
+      if (dist < 0.28 && angErr < 0.12) break;
+      const along = dx * Math.cos(state.angle) + dy * Math.sin(state.angle);
+      let speed = 0;
+      if (along < -0.05) speed = -1.3;
+      else if (along > 0.05) speed = 1.1;
+      else if (angErr > 0.1) speed = -0.4;
+      if (speed === 0) {
+        if (angErr < 0.08) break;
+        state.angle += Math.max(
+          -0.04,
+          Math.min(0.04, wrapAngle(finishAng - state.angle))
+        );
+        record(true);
+        continue;
+      }
+      const before = { x: state.x, y: state.y };
+      const moved = integrateBicycle(
+        state,
+        speed,
+        steerTowardHeading(state.angle, finishAng, speed < 0, maxSteer * 0.45),
+        dt,
+        vehicle,
+        curbLine
+      );
+      if (moved && Math.hypot(state.x - before.x, state.y - before.y) > 1e-6) {
+        record(false);
+      } else {
+        break;
+      }
+    }
+    hold(12);
+
+    const duration = Math.max(7, Math.min(11, poses.length / 30));
     return {
       id: lvl.id,
       poses: poses,
-      duration: 8.5,
+      duration: duration,
       label: "Parallel park demo",
     };
   }
